@@ -28,13 +28,17 @@ const CARD_TABLE = "CREATE TABLE IF NOT EXISTS Cards ( " +
 	"image VARCHAR(255) NOT NULL," +
 	"rank INT NOT NULL," +
 	"suit CHARACTER(20) NOT NULL," +
-	"remaining INTEGER DEFAULT 0)"
+	"remaining INTEGER DEFAULT 0," +
+	"indexDraw INTEGER NULL);"
+
+const PICKED_CARD_TABLE = "CREATE TABLE IF NOT EXISTS PickedCards ( " +
+	"pickedCardId INTEGER PRIMARY KEY AUTOINCREMENT,"
 
 const CREATE_DECK = "INSERT INTO Decks(deck_id, error, remaining) VALUES($deckId, $err, $cardAmount);"
 
 const CREATE_CARDS = "INSERT INTO Cards(deck_id, code, image, rank, suit, remaining) VALUES($deckId, $code, $image, $rank, $suit, $remaining);"
 
-const UPDATE_CARDS = "UPDATE Cards SET(remaining = remaining + 1) WHERE deckId = $deckId AND code = $code; UPDATE Decks SET remaining = remaining - 1 WHERE deckId = $deckId;"
+const UPDATE_CARDS = "UPDATE Cards SET remaining = remaining + 1 WHERE deck_id == $deckId AND code == $code; UPDATE Decks SET remaining = remaining + 1 WHERE deck_id == $deckId;"
 
 const GET_DECK = "SELECT COUNT(*) FROM Decks WHERE deckId = $deckId;"
 
@@ -68,7 +72,6 @@ type Card struct {
 }
 
 type AddCard struct {
-	///Code   []string
 	Code   string
 	DeckId uuid.UUID
 }
@@ -136,54 +139,18 @@ func insertCards(c chan DeckRequest, db *CardDeckDB, wg *sync.WaitGroup) {
 		_ = tx.Commit()
 	}
 
-	for s := 0; s < 4; s++ {
-		var suit string
-		switch s {
-		case 0:
-			{
-				suit = "d"
-				break
-			}
-		case 1:
-			{
-				suit = "s"
-				break
-			}
-		case 2:
-			{
-				suit = "h"
-				break
-			}
-		default:
-			suit = "c"
-		}
+	for _, suit := range []string{"d", "s", "h", "c"} {
 		for r := 1; r <= 13; r++ {
-			var code = strconv.Itoa(r) + suit
-			var image = "/static/" + code + ".svg"
+			code := fmt.Sprintf("%d%s", r, suit)
+			image := fmt.Sprintf("/static/%s.svg", code)
 			query, err := db.db.Prepare(CREATE_CARDS)
 			if err != nil {
 				_ = tx.Rollback()
 			}
 			_, err = query.Exec(dr.DeckId, code, image, r, suit, deckAmount)
-			if err != nil {
-				_ = tx.Rollback()
-			}
 			_ = tx.Commit()
 		}
 	}
-	/*
-		for _, suit := range []string{"d", "s", "h", "c"} {
-			for r := 1; r <= 13; r++ {
-				code := fmt.Sprintf("%d%s", r, suit)
-				image := fmt.Sprintf("/static/%s.svg", code)
-				_, err := tx.Prepare(CREATE_CARDS)
-				if err != nil {
-					_ = tx.Rollback()
-					//return err
-				}
-				_, err = tx.Exec(dr.DeckId, code, image, r, suit, deckAmount)
-			}
-		}*/
 }
 
 // Vérifie s'il n'y a pas d'erreur pour la création d'un deck
@@ -301,17 +268,18 @@ func checkDeck(c chan string, db *CardDeckDB, wg *sync.WaitGroup, isGood *bool) 
 	*isGood = false
 }
 
-func addCards(c chan [1]AddCard, db *CardDeckDB, wg *sync.WaitGroup) {
+func addCards(c chan AddCard, db *CardDeckDB, wg *sync.WaitGroup) {
 	defer close(c)
 	defer wg.Done()
 	ac := <-c
-	for _, card := range ac {
+	codes := strings.Split(ac.Code, ",")
+	for _, card := range codes {
 		tx, _ := db.db.Begin()
 		query, err := db.db.Prepare(UPDATE_CARDS)
 		if err != nil {
 			_ = tx.Rollback()
 		}
-		_, err = query.Exec(card.DeckId, card.Code, card.DeckId)
+		_, err = query.Exec(ac.DeckId, card)
 		if err != nil {
 			_ = tx.Rollback()
 		}
@@ -326,32 +294,33 @@ func addMoreCards(w http.ResponseWriter, r *http.Request) {
 	var errs = ""
 	db, _ := dbCreation()
 	var vars = mux.Vars(r)
-	var deckId = vars["deckid"]
+	var deckId, _ = uuid.Parse(vars["deckid"])
 	url := r.URL.Query().Get("cards")
 	url = strings.Trim(url, "")
 	cards := strings.Split(url, ",")
 	dc := make(chan string)
-	cc := make(chan [1]AddCard)
-	ac := new([1]AddCard)
-
-	go func() {
-		dc <- deckId
-	}()
-
-	go func() {
-		for i, card := range cards {
-			ac[i].DeckId, _ = uuid.Parse(deckId)
-			ac[i].Code = card
-		}
-
-		cc <- *ac
-	}()
+	cc := make(chan AddCard)
+	var ac AddCard
 
 	for card := range cards {
 		if !checkCard(cards[card]) {
 			errs += "\nUne carte ne respecte pas la syntaxe (6h, si joker: 0sc)\n"
 		}
 	}
+	if errs == "" {
+		ac = AddCard{
+			DeckId: deckId,
+			Code:   url,
+		}
+	}
+
+	go func() {
+		dc <- deckId.String()
+	}()
+
+	go func() {
+		cc <- ac
+	}()
 
 	if len(errs) < 0 {
 		wg.Add(1)
@@ -378,7 +347,7 @@ func getCard(c chan string, db *CardDeckDB, wg *sync.WaitGroup, cardDrew *bool) 
 	defer close(c)
 	defer wg.Done()
 
-	code := <-c
+	//code := <-c
 
 }
 
@@ -437,9 +406,9 @@ func draw(w http.ResponseWriter, r *http.Request) {
 				wg.Add(1)
 				go hasRemaining(rc, db, &wg, &cardRemaining)
 				wg.Wait()
-				if cardRemaining {
-					getCard()
-				}
+				//if cardRemaining {
+				//	getCard()
+				//}
 			}
 		}()
 		wg.Wait()
@@ -468,7 +437,7 @@ func requestHandler() {
 func main() {
 	_, err := dbCreation()
 	if err == nil {
-		fmt.Printf("DB Created")
+		fmt.Printf("DB Created\n")
 	}
 
 	requestHandler()
