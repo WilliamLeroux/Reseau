@@ -22,13 +22,17 @@ const (
 
 	CREATE_DECK = "INSERT INTO Decks(deck_id, error, remaining) VALUES($deckId, $err, $cardAmount);"
 
-	CREATE_CARDS = "INSERT INTO Cards(deck_id, code, image, rank, suit, remaining) VALUES($deckId, $code, $image, $rank, $suit, $remaining);"
+	CREATE_CARDS = "INSERT INTO Cards(deck_id, code, image, rank, suit, index_draw) VALUES($deckId, $code, $image, $rank, $suit, $index);"
 
-	UPDATE_CARDS = "UPDATE Cards SET remaining = remaining + 1 WHERE deck_id == $deckId AND code == $code; UPDATE Decks SET remaining = remaining + 1 WHERE deck_id == $deckId;"
+	ADD_CARD = "INSERT INTO Cards(deck_id, code, image, rank, suit, priority_order) VALUES($deckId, $code, $image, $rank, $suit, $order); UPDATE Decks SET remaining = remaining + 1 WHERE deck_id == $deckId;"
 
-	GET_DECK = "SELECT COUNT(*) FROM Decks WHERE deck_Id = $deckId;"
+	GET_DECK             = "SELECT COUNT(*) FROM Decks WHERE deck_Id = $deckId;"
+	GET_CARD_PRIORITY    = "SELECT code, image, rank, suit FROM Cards WHERE deck_id = $deckId AND priority_order = ?;"
+	GET_CARD             = "SELECT * FROM Cards WHERE code = $code AND deck_id = $deckId; UPDATE Decks SET remaining = remaining - 1 WHERE deck_id = $deckId;"
+	GET_PRIORITY         = `SELECT priority_order FROM Cards WHERE deck_id = $deckId AND priority_order > 0 ORDER BY priority_order;`
+	GET_HIGHEST_PRIORITY = `SELECT MAX(priority_order) FROM Cards WHERE deck_id = $deckId;`
+	HAS_PRIORITY         = `SELECT MIN(priority_order) FROM Cards WHERE deck_id = $deckId;`
+	SET_PICKED_DATE      = "UPDATE Cards SET draw_date = date('now') WHERE deck_id = $deckId;"
 
-	GET_CARD = "SELECT * FROM Cards WHERE code = $code AND deck_Id = $deckId; UPDATE Decks SET remaining = remaining - 1 WHERE deck_Id = $deckId;"
-
-	HAS_REMAINING = "SELECT remaining FROM Cards WHERE deck_Id = $deckId AND code = $code;"
+	//HAS_REMAINING = "SELECT remaining FROM Cards WHERE deck_Id = $deckId AND code = $code;"
 )

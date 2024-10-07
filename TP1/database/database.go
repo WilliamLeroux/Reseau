@@ -38,6 +38,7 @@ func InsertDeck(c chan models.DeckRequest, db *CardDeckDB, wg *sync.WaitGroup) {
 
 	query, err := db.db.Prepare(CREATE_DECK)
 	if err != nil {
+		println(err.Error())
 		_ = tx.Rollback()
 	}
 	_, err = query.Exec(dr.DeckId, dr.Error, dr.CardAmount)
@@ -51,58 +52,77 @@ func InsertCards(c chan models.DeckRequest, db *CardDeckDB, wg *sync.WaitGroup) 
 	defer close(c)
 	defer wg.Done()
 	dr := <-c
-
+	var index = 1
 	tx, _ := db.db.Begin()
 
 	deckAmount := dr.CardAmount / 52
 	if dr.Joker {
 		deckAmount = dr.CardAmount / 54
-		query, err := db.db.Prepare(CREATE_CARDS)
-		if err != nil {
-			_ = tx.Rollback()
-		}
-		_, err = query.Exec(dr.DeckId, "0sc", "/static/0sc.svg", 0, "sc", deckAmount)
-		if err != nil {
-			_ = tx.Rollback()
-		}
-		_ = tx.Commit()
-		_, err = query.Exec(dr.DeckId, "0dh", "/static/0dh.svg", 0, "dh", deckAmount)
-		if err != nil {
-			_ = tx.Rollback()
-		}
-		_ = tx.Commit()
-	}
-
-	for _, suit := range []string{"d", "s", "h", "c"} {
-		for r := 1; r <= 13; r++ {
-			code := fmt.Sprintf("%d%s", r, suit)
-			image := fmt.Sprintf("/static/%s.svg", code)
+		for i := 0; i <= deckAmount; i++ {
 			query, err := db.db.Prepare(CREATE_CARDS)
 			if err != nil {
 				_ = tx.Rollback()
 			}
-			_, err = query.Exec(dr.DeckId, code, image, r, suit, deckAmount)
+			_, err = query.Exec(dr.DeckId, "0sc", "/static/0sc.svg", 0, "sc", index)
+			if err != nil {
+				println(err.Error())
+				_ = tx.Rollback()
+			}
 			_ = tx.Commit()
+			index++
+			query, err = db.db.Prepare(CREATE_CARDS)
+			if err != nil {
+				_ = tx.Rollback()
+			}
+			_, err = query.Exec(dr.DeckId, "0dh", "/static/0dh.svg", 0, "dh", index)
+			if err != nil {
+				_ = tx.Rollback()
+			}
+			_ = tx.Commit()
+			index++
+		}
+
+	}
+
+	for i := 1; i <= deckAmount; i++ {
+		for _, suit := range []string{"d", "s", "h", "c"} {
+			for r := 1; r <= 13; r++ {
+				code := fmt.Sprintf("%d%s", r, suit)
+				image := fmt.Sprintf("/static/%s.svg", code)
+				query, err := db.db.Prepare(CREATE_CARDS)
+				if err != nil {
+					println(err.Error())
+					_ = tx.Rollback()
+				}
+				_, err = query.Exec(dr.DeckId, code, image, r, suit, index)
+				_ = tx.Commit()
+				index++
+			}
 		}
 	}
 }
 
-func AddCards(c chan models.AddCard, db *CardDeckDB, wg *sync.WaitGroup) {
+func AddCards(c chan models.AddCard, db *CardDeckDB, wg *sync.WaitGroup, order int) {
 	defer close(c)
 	defer wg.Done()
 	ac := <-c
 	codes := strings.Split(ac.Code, ",")
+
+	tx, _ := db.db.Begin()
+
 	for _, card := range codes {
-		tx, _ := db.db.Begin()
-		query, err := db.db.Prepare(UPDATE_CARDS)
+
+		query, err := db.db.Prepare(ADD_CARD)
 		if err != nil {
 			_ = tx.Rollback()
 		}
-		_, err = query.Exec(ac.DeckId, card)
+
+		_, err = query.Exec(ac.DeckId, card, "/static/"+card+".svg", string(card[0]), string(card[1]), order)
 		if err != nil {
 			_ = tx.Rollback()
 		}
 		_ = tx.Commit()
+		order++
 	}
 
 }
@@ -128,18 +148,74 @@ func CheckDeck(c chan string, db *CardDeckDB, wg *sync.WaitGroup, isGood *bool) 
 		row, _ := result.Columns()
 		if len(row) > 0 {
 			*isGood = true
+			return
 		}
 	}
 	*isGood = false
 }
 
-func getCard(c chan string, db *CardDeckDB, wg *sync.WaitGroup, cardDrew *bool) {
+func getCard(c chan models.CardResponse, db *CardDeckDB, wg *sync.WaitGroup) {
 	defer close(c)
 	defer wg.Done()
 	//code := <-c
 
 }
 
+func GetPriority(c chan string, db *CardDeckDB, wg *sync.WaitGroup, hasPriority *bool) {
+	defer close(c)
+	defer wg.Done()
+	tx, err := db.db.Begin()
+	if err != nil {
+		fmt.Printf(err.Error())
+	}
+	query, err := db.db.Prepare(HAS_PRIORITY)
+	if err != nil {
+		_ = tx.Rollback()
+	}
+	result, err := query.Query(<-c)
+	if err != nil {
+		_ = tx.Rollback()
+		return
+	}
+	for result.Next() {
+		var priority = 0
+		err := result.Scan(priority)
+		if err != nil {
+			return
+		}
+		if priority != 0 {
+			*hasPriority = true
+		}
+	}
+}
+
+func GetHighestPriority(c chan string, db *CardDeckDB, wg *sync.WaitGroup, order *int) {
+	defer close(c)
+	defer wg.Done()
+
+	tx, err := db.db.Begin()
+	if err != nil {
+		fmt.Printf(err.Error())
+	}
+	query, err := db.db.Prepare(GET_HIGHEST_PRIORITY)
+	if err != nil {
+		_ = tx.Rollback()
+	}
+	result, err := query.Query(<-c)
+	if err != nil {
+		_ = tx.Rollback()
+		return
+	}
+
+	for result.Next() {
+		err = result.Scan(order)
+		if err != nil {
+			return
+		}
+	}
+}
+
+/*
 func HasRemaining(c chan models.AddCard, db *CardDeckDB, wg *sync.WaitGroup, cardRemaining *bool) bool {
 	defer wg.Done()
 
@@ -156,4 +232,4 @@ func HasRemaining(c chan models.AddCard, db *CardDeckDB, wg *sync.WaitGroup, car
 	}
 	_ = tx.Commit()
 	return false
-}
+}*/

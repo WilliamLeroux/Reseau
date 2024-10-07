@@ -23,9 +23,9 @@ import (
 
 func requestHandler() {
 	r := mux.NewRouter()
-	r.HandleFunc("/deck/new/{nbDeck:1}/{jokers:false}", handlers.NewDeck).Methods("GET")
+	r.HandleFunc("/deck/new/{nbDeck}/{jokers:false}", handlers.NewDeck).Methods("GET")
 	r.HandleFunc("/deck/{deckid}/add", handlers.AddMoreCards).Methods("GET")
-	r.HandleFunc("/deck/{deckid}/draw/{nbrCarte}", handlers.Draw).Methods("GET")
+	r.HandleFunc("/deck/{deckid}/draw", handlers.Draw).Methods("GET")
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
 

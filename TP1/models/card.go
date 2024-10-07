@@ -13,3 +13,8 @@ type Card struct {
 	Rank  int    `json:"rank"`
 	Suit  string `json:"suit"`
 }
+
+type CardResponse struct {
+	NbCard int
+	Cards  []Card `json:"cards"`
+}

@@ -6,9 +6,7 @@ import (
 	"TP1/utils"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"math/rand"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -26,6 +24,7 @@ func AddMoreCards(w http.ResponseWriter, r *http.Request) {
 	dc := make(chan string)
 	cc := make(chan models.AddCard)
 	var ac models.AddCard
+	var order = 0
 
 	for card := range cards {
 		if !utils.CheckCard(cards[card]) {
@@ -58,8 +57,13 @@ func AddMoreCards(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if errs == "" {
+
 		wg.Add(1)
-		go database.AddCards(cc, db, &wg)
+		go database.GetHighestPriority(dc, db, &wg, &order)
+		wg.Wait()
+		order++
+		wg.Add(1)
+		go database.AddCards(cc, db, &wg, order)
 		wg.Wait()
 		_, _ = w.Write([]byte("Cartes ajoutées"))
 	} else {
@@ -73,21 +77,20 @@ func Draw(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var deckId = mux.Vars(r)["deckid"]
 	var isGood = false
-	var cardDrew = false
-	nbCard, ok := strconv.Atoi(mux.Vars(r)["nbCard"])
+	var hasPriority = false
+	var priorityCards = 0
+	//nbCard, ok := strconv.Atoi(mux.Vars(r)["nbCard"])
 	db, _ := database.DbCreation()
-	request := new(models.AddCard)
+	//request := new(models.AddCard)
 	dc := make(chan string)
-	rc := make(chan models.AddCard)
-	var cardSuits = [14]string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}
-	var cardRanks = [4]string{"d", "s", "h", "c"}
+	rc := make(chan string)
 
-	if ok != nil {
-		nbCard = 1
-		println(nbCard)
-	}
+	//if ok != nil {
+	//	nbCard = 1
+	//}
 	go func() {
 		dc <- deckId
+		rc <- deckId
 	}()
 
 	wg.Add(1)
@@ -96,21 +99,12 @@ func Draw(w http.ResponseWriter, r *http.Request) {
 
 	if isGood {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for !cardDrew {
-				request.Code = cardSuits[rand.Intn(len(cardSuits))] + cardRanks[rand.Intn(len(cardRanks))]
-				rc <- *request
-				var cardRemaining = false
-				wg.Add(1)
-				go database.HasRemaining(rc, db, &wg, &cardRemaining)
-				wg.Wait()
-				//if cardRemaining {
-				//	getCard()
-				//}
-			}
-		}()
+		go database.GetPriority(rc, db, &wg, &hasPriority)
 		wg.Wait()
+	}
+
+	if hasPriority {
+
 	}
 
 }

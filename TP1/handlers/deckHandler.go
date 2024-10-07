@@ -19,24 +19,26 @@ func NewDeck(w http.ResponseWriter, r *http.Request) {
 	var vars = mux.Vars(r)                           // Arguments
 	nbDeck, err := strconv.Atoi(vars["nbDeck"])      // Nombre de paquet
 	jokers, err := strconv.ParseBool(vars["jokers"]) // Joker inclu ou non
-	var cardAmount = 52                              // Nombre de carte
+	var cardAmount = 52 * nbDeck                     // Nombre de carte
 	var deckId = uuid.New()                          // id du paquet
-	dc := make(chan models.DeckRequest)              // DeckChannel
-	cc := make(chan models.DeckRequest)              //CardChannel
-	dr := new(models.DeckRequest)                    // DeckRequest
+	dc := make(chan models.DeckRequest)
+	cc := make(chan models.DeckRequest) // DeckChannel
 
 	if jokers {
 		cardAmount += 2
 	}
+	dr := models.DeckRequest{
+		DeckId:     deckId,
+		CardAmount: cardAmount,
+		Joker:      jokers,
+		Error:      errs,
+	}
 
 	go func() {
-		dr.DeckId = deckId
 		utils.CheckCreateDeckError(&errs, err, &nbDeck)
-		dr.Error = errs
-		dr.CardAmount = cardAmount * nbDeck
-		dr.Joker = jokers
-		dc <- *dr
-		cc <- *dr
+
+		dc <- dr
+		cc <- dr
 	}()
 
 	if err == nil {
