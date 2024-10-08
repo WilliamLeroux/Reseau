@@ -13,7 +13,7 @@ import (
 )
 
 func NewDeck(w http.ResponseWriter, r *http.Request) {
-	var wg sync.WaitGroup                            // Waitgroup
+	var mu sync.Mutex
 	var errs = ""                                    // Erreurs
 	db, _ := database.DbCreation()                   // base de donnée
 	var vars = mux.Vars(r)                           // Arguments
@@ -22,7 +22,6 @@ func NewDeck(w http.ResponseWriter, r *http.Request) {
 	var cardAmount = 52 * nbDeck                     // Nombre de carte
 	var deckId = uuid.New()                          // id du paquet
 	dc := make(chan models.DeckRequest)
-	cc := make(chan models.DeckRequest) // DeckChannel
 
 	if jokers {
 		cardAmount += 2
@@ -36,24 +35,17 @@ func NewDeck(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		utils.CheckCreateDeckError(&errs, err, &nbDeck)
-
 		dc <- dr
-		cc <- dr
 	}()
 
 	if err == nil {
-		wg.Add(1)
-		go database.InsertDeck(dc, db, &wg)
-		wg.Wait()
-
-		wg.Add(1)
-		go database.InsertCards(cc, db, &wg)
-		wg.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		database.InsertDeck(dc, db)
 	}
-
-	err = json.NewEncoder(w).Encode(&dr)
+	w.Header().Set("Content-Type", "application/json")
+	err = json.NewEncoder(w).Encode(dr)
 	if err != nil {
 		return
 	}
-
 }

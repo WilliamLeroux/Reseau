@@ -78,7 +78,7 @@ func Draw(w http.ResponseWriter, r *http.Request) {
 	var deckId = mux.Vars(r)["deckid"]
 	var isGood = false
 	var hasPriority = false
-	var priorityCards = 0
+	//var priorityCards = 0
 	//nbCard, ok := strconv.Atoi(mux.Vars(r)["nbCard"])
 	db, _ := database.DbCreation()
 	//request := new(models.AddCard)

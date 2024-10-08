@@ -23,6 +23,7 @@ import (
 
 func requestHandler() {
 	r := mux.NewRouter()
+
 	r.HandleFunc("/deck/new/{nbDeck}/{jokers:false}", handlers.NewDeck).Methods("GET")
 	r.HandleFunc("/deck/{deckid}/add", handlers.AddMoreCards).Methods("GET")
 	r.HandleFunc("/deck/{deckid}/draw", handlers.Draw).Methods("GET")

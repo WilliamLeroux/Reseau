@@ -29,9 +29,7 @@ func DbCreation() (*CardDeckDB, error) {
 	}, nil
 }
 
-func InsertDeck(c chan models.DeckRequest, db *CardDeckDB, wg *sync.WaitGroup) {
-	defer close(c)
-	defer wg.Done()
+func InsertDeck(c chan models.DeckRequest, db *CardDeckDB) {
 	dr := <-c
 
 	tx, _ := db.db.Begin()
@@ -41,47 +39,35 @@ func InsertDeck(c chan models.DeckRequest, db *CardDeckDB, wg *sync.WaitGroup) {
 		println(err.Error())
 		_ = tx.Rollback()
 	}
+	defer query.Close()
 	_, err = query.Exec(dr.DeckId, dr.Error, dr.CardAmount)
 	if err != nil {
 		_ = tx.Rollback()
 	}
+
+	err = InsertCards(dr, tx)
+	if err != nil {
+		dr.Error = err.Error()
+	}
 	_ = tx.Commit()
 }
 
-func InsertCards(c chan models.DeckRequest, db *CardDeckDB, wg *sync.WaitGroup) {
-	defer close(c)
-	defer wg.Done()
-	dr := <-c
+func InsertCards(dr models.DeckRequest, tx *sql.Tx) error {
 	var index = 1
-	tx, _ := db.db.Begin()
 
 	deckAmount := dr.CardAmount / 52
 	if dr.Joker {
 		deckAmount = dr.CardAmount / 54
 		for i := 0; i <= deckAmount; i++ {
-			query, err := db.db.Prepare(CREATE_CARDS)
-			if err != nil {
-				_ = tx.Rollback()
+			if err := insertCard(tx, dr.DeckId.String(), "0sc", "/static/0sc.svg", "sc", index); err != nil {
+				return fmt.Errorf("une carte joker n'a pas plus être ajouté: %w", err)
 			}
-			_, err = query.Exec(dr.DeckId, "0sc", "/static/0sc.svg", 0, "sc", index)
-			if err != nil {
-				println(err.Error())
-				_ = tx.Rollback()
-			}
-			_ = tx.Commit()
 			index++
-			query, err = db.db.Prepare(CREATE_CARDS)
-			if err != nil {
-				_ = tx.Rollback()
+			if err := insertCard(tx, dr.DeckId.String(), "0dh", "/static/0dh.svg", "dh", index); err != nil {
+				return fmt.Errorf("une carte joker n'a pas plus être ajouté: %w", err)
 			}
-			_, err = query.Exec(dr.DeckId, "0dh", "/static/0dh.svg", 0, "dh", index)
-			if err != nil {
-				_ = tx.Rollback()
-			}
-			_ = tx.Commit()
 			index++
 		}
-
 	}
 
 	for i := 1; i <= deckAmount; i++ {
@@ -89,17 +75,28 @@ func InsertCards(c chan models.DeckRequest, db *CardDeckDB, wg *sync.WaitGroup) 
 			for r := 1; r <= 13; r++ {
 				code := fmt.Sprintf("%d%s", r, suit)
 				image := fmt.Sprintf("/static/%s.svg", code)
-				query, err := db.db.Prepare(CREATE_CARDS)
-				if err != nil {
-					println(err.Error())
-					_ = tx.Rollback()
+				if err := insertCard(tx, dr.DeckId.String(), code, image, suit, index); err != nil {
+					return fmt.Errorf("cette carte n'a pas plus être ajouté %s: %w", code, err)
 				}
-				_, err = query.Exec(dr.DeckId, code, image, r, suit, index)
-				_ = tx.Commit()
 				index++
 			}
 		}
 	}
+	return fmt.Errorf("")
+}
+
+func insertCard(tx *sql.Tx, deckId, code, image, suit string, order int) error {
+	query, err := tx.Prepare(CREATE_CARDS)
+	if err != nil {
+		return fmt.Errorf("une carte n'a pas plus être créer: %w", err)
+	}
+	defer query.Close()
+
+	_, err = query.Exec(deckId, code, image, 0, suit, order)
+	if err != nil {
+		return fmt.Errorf("une carte n'a pas plus être créer: %w", err)
+	}
+	return nil
 }
 
 func AddCards(c chan models.AddCard, db *CardDeckDB, wg *sync.WaitGroup, order int) {
