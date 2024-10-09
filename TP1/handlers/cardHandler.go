@@ -4,9 +4,11 @@ import (
 	"TP1/database"
 	"TP1/models"
 	"TP1/utils"
+	"encoding/json"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -15,7 +17,7 @@ import (
 func AddMoreCards(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var errs = ""
-	db, _ := database.DbCreation()
+	Db, _ := database.DbCreation()
 	var vars = mux.Vars(r)
 	var deckId, _ = uuid.Parse(vars["deckid"])
 	url := r.URL.Query().Get("cards")
@@ -25,7 +27,9 @@ func AddMoreCards(w http.ResponseWriter, r *http.Request) {
 	cc := make(chan models.AddCard)
 	var ac models.AddCard
 	var order = 0
-
+	var db = models.CardDeckDB{
+		Db: Db,
+	}
 	for card := range cards {
 		if !utils.CheckCard(cards[card]) {
 			errs += "\nUne carte ne respecte pas la syntaxe (6h, si joker: 0sc)\n"
@@ -74,37 +78,55 @@ func AddMoreCards(w http.ResponseWriter, r *http.Request) {
 
 // /deck/{deckid}/draw/{nbrCarte:1}
 func Draw(w http.ResponseWriter, r *http.Request) {
-	var wg sync.WaitGroup
-	var deckId = mux.Vars(r)["deckid"]
-	var isGood = false
-	var hasPriority = false
-	//var priorityCards = 0
-	//nbCard, ok := strconv.Atoi(mux.Vars(r)["nbCard"])
+	var mu sync.Mutex
+	var deckId, _ = uuid.Parse(mux.Vars(r)["deckid"])
+	nbCard, ok := strconv.Atoi(mux.Vars(r)["nbCard"])
 	db, _ := database.DbCreation()
-	//request := new(models.AddCard)
-	dc := make(chan string)
-	rc := make(chan string)
+	cr := make(chan models.DrawCardRequest)
 
-	//if ok != nil {
-	//	nbCard = 1
-	//}
-	go func() {
-		dc <- deckId
-		rc <- deckId
-	}()
-
-	wg.Add(1)
-	go database.CheckDeck(dc, db, &wg, &isGood)
-	wg.Wait()
-
-	if isGood {
-		wg.Add(1)
-		go database.GetPriority(rc, db, &wg, &hasPriority)
-		wg.Wait()
+	if ok != nil {
+		_, _ = w.Write([]byte("Erreur dans le nombre de carte demandé"))
+		return
 	}
 
-	if hasPriority {
-
+	mu.Lock()
+	go database.DrawCard(cr, db)
+	cr <- models.DrawCardRequest{
+		NbCard: nbCard,
+		Reponse: models.CardResponse{
+			Deck: models.DeckRequest{
+				DeckId: deckId,
+			},
+			Cards: []models.Card{},
+		},
 	}
+	mu.Unlock()
+	response := <-cr
+	w.Header().Set("Content-Type", "application/json")
+	err := json.NewEncoder(w).Encode(response.Reponse)
+	if err != nil {
+		return
+	}
+}
 
+func Shuffle(w http.ResponseWriter, r *http.Request) {
+	var mu sync.Mutex
+	var vars = mux.Vars(r)
+	var deckId, _ = uuid.Parse(vars["deckid"])
+	db, _ := database.DbCreation()
+	sc := make(chan models.ShuffleRequest)
+
+	mu.Lock()
+	go database.ShuffleDeck(sc)
+	sc <- models.ShuffleRequest{
+		DeckId: deckId,
+		Db:     db,
+	}
+	mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	err := json.NewEncoder(w).Encode(<-sc)
+	if err != nil {
+		return
+	}
 }

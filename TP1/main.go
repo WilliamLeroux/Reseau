@@ -21,12 +21,16 @@ import (
 
 //TODO: /static/back.svg
 
+//TODO: /deck/{deckid}/draw/{nbrCarte:1}
+
 func requestHandler() {
 	r := mux.NewRouter()
 
 	r.HandleFunc("/deck/new/{nbDeck}/{jokers:false}", handlers.NewDeck).Methods("GET")
+	r.HandleFunc("/deck/new/{nbDeck}/{jokers:true}", handlers.NewDeck).Methods("GET")
 	r.HandleFunc("/deck/{deckid}/add", handlers.AddMoreCards).Methods("GET")
-	r.HandleFunc("/deck/{deckid}/draw", handlers.Draw).Methods("GET")
+	r.HandleFunc("/deck/{deckid}/draw/{nbCard}", handlers.Draw).Methods("GET")
+	r.HandleFunc("/deck/{deckid}/shuffle", handlers.Shuffle).Methods("GET")
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
 
@@ -35,5 +39,6 @@ func main() {
 	if err == nil {
 		fmt.Printf("DB Created\n")
 	}
+
 	requestHandler()
 }

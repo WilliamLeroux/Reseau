@@ -33,3 +33,16 @@ func TestCreateDeck(t *testing.T) {
 	wg.Wait()
 	t.Log("All requests completed")
 }
+
+func TestDrawCard(t *testing.T) {
+	var wg sync.WaitGroup
+	url := "http://localhost:8080/deck/8c376730-7f58-4431-a037-417ec119968e/draw/1"
+	concurrentUsers := 100
+
+	for i := 0; i < concurrentUsers; i++ {
+		wg.Add(1)
+		go sendRequest(&wg, url)
+	}
+	wg.Wait()
+	t.Log("All requests completed")
+}

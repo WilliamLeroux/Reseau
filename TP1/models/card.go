@@ -1,6 +1,9 @@
 package models
 
-import "github.com/google/uuid"
+import (
+	"database/sql"
+	"github.com/google/uuid"
+)
 
 type AddCard struct {
 	Code   string
@@ -15,6 +18,18 @@ type Card struct {
 }
 
 type CardResponse struct {
-	NbCard int
-	Cards  []Card `json:"cards"`
+	Deck  DeckRequest `json:"deck"`
+	Cards []Card      `json:"cards"`
+}
+
+type DrawCardRequest struct {
+	NbCard  int          `json:"-"`
+	Reponse CardResponse `json:"response"`
+}
+
+type ShuffleRequest struct {
+	DeckId   uuid.UUID `json:"-"`
+	Db       *sql.DB   `json:"-"`
+	ErrorMsg string    `json:"error,omitempty"`
+	Response string    `json:"response,omitempty"`
 }

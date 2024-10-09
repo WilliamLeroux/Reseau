@@ -12,6 +12,8 @@ import (
 	"sync"
 )
 
+var c = make(chan models.DeckRequest)
+
 func NewDeck(w http.ResponseWriter, r *http.Request) {
 	var mu sync.Mutex
 	var errs = ""                                    // Erreurs
@@ -21,7 +23,7 @@ func NewDeck(w http.ResponseWriter, r *http.Request) {
 	jokers, err := strconv.ParseBool(vars["jokers"]) // Joker inclu ou non
 	var cardAmount = 52 * nbDeck                     // Nombre de carte
 	var deckId = uuid.New()                          // id du paquet
-	dc := make(chan models.DeckRequest)
+	//dc := make(chan models.DeckRequest)
 
 	if jokers {
 		cardAmount += 2
@@ -35,13 +37,14 @@ func NewDeck(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		utils.CheckCreateDeckError(&errs, err, &nbDeck)
-		dc <- dr
+		//dc <- dr
+		c <- dr
 	}()
 
 	if err == nil {
 		mu.Lock()
 		defer mu.Unlock()
-		database.InsertDeck(dc, db)
+		database.InsertDeck(c, db)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(dr)
