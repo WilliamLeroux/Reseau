@@ -39,7 +39,7 @@ func InsertDeck(c chan models.DeckRequest) {
 		c <- dr
 		return
 	}
-	defer query.Close()
+
 	_, err = query.Exec(dr.DeckId, dr.Error, dr.CardAmount)
 	if err != nil {
 		_ = tx.Rollback()
@@ -47,49 +47,57 @@ func InsertDeck(c chan models.DeckRequest) {
 		c <- dr
 		return
 	}
-
-	err = InsertCards(dr, tx)
+	_ = tx.Commit()
+	err = InsertCards(dr) //tx
 	if err != nil {
 		dr.Error = err.Error()
 		dr.Error = err.Error()
 		c <- dr
 		return
 	}
-	_ = tx.Commit()
+
 	c <- dr
 }
 
 // InsertCards Ajoute les cartes au deck
-func InsertCards(dr models.DeckRequest, tx *sql.Tx) error {
+func InsertCards(dr models.DeckRequest) error { //, tx *sql.Tx
 	var index = 1
 
 	deckAmount := dr.CardAmount / 52
 	if dr.Joker {
 		deckAmount = dr.CardAmount / 54
 		for i := 1; i <= deckAmount; i++ {
-			if err := insertCard(tx, dr.DeckId.String(), "0jr", "/static/0jr.svg", "sc", index, 0); err != nil {
+			tx, err := dr.Db.Begin()
+			err = insertCard(tx, dr.DeckId.String(), "0jr", "/static/0jr.svg", "sc", index, 0)
+			if err != nil {
 				return fmt.Errorf("une carte joker n'a pas plus être ajouté: %w", err)
 			}
 			index++
-			if err := insertCard(tx, dr.DeckId.String(), "0jn", "/static/0jn.svg", "dh", index, 0); err != nil {
+			err = insertCard(tx, dr.DeckId.String(), "0jn", "/static/0jn.svg", "dh", index, 0)
+			if err != nil {
 				return fmt.Errorf("une carte joker n'a pas plus être ajouté: %w", err)
 			}
 			index++
+			tx.Commit()
 		}
 	}
 
 	for i := 1; i <= deckAmount; i++ {
 		for _, suit := range []string{"d", "s", "h", "c"} {
 			for r := 1; r <= 13; r++ {
+				tx, err := dr.Db.Begin()
 				code := fmt.Sprintf("%d%s", r, suit)
 				image := fmt.Sprintf("/static/%s.svg", code)
-				if err := insertCard(tx, dr.DeckId.String(), code, image, suit, index, r); err != nil {
+				err = insertCard(tx, dr.DeckId.String(), code, image, suit, index, r)
+				if err != nil {
 					return fmt.Errorf("cette carte n'a pas plus être ajouté %s: %w", code, err)
 				}
+				tx.Commit()
 				index++
 			}
 		}
 	}
+
 	return fmt.Errorf("")
 }
 
