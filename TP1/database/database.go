@@ -2,9 +2,11 @@ package database
 
 import (
 	"TP1/models"
+	"TP1/utils"
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -21,47 +23,55 @@ func DbCreation() (*sql.DB, error) {
 		return nil, err
 	}
 
-	//return &models.CardDeckDB{
-	//	Db: db,
-	//}, nil
 	return db, nil
 }
 
-func InsertDeck(c chan models.DeckRequest, db *sql.DB) {
+// InsertDeck Ajoute un deck
+func InsertDeck(c chan models.DeckRequest) {
 	dr := <-c
 
-	tx, _ := db.Begin()
+	tx, _ := dr.Db.Begin()
 
-	query, err := db.Prepare(CREATE_DECK)
+	query, err := dr.Db.Prepare(CREATE_DECK)
 	if err != nil {
-		println(err.Error())
 		_ = tx.Rollback()
+		dr.Error = err.Error()
+		c <- dr
+		return
 	}
 	defer query.Close()
 	_, err = query.Exec(dr.DeckId, dr.Error, dr.CardAmount)
 	if err != nil {
 		_ = tx.Rollback()
+		dr.Error = err.Error()
+		c <- dr
+		return
 	}
 
 	err = InsertCards(dr, tx)
 	if err != nil {
 		dr.Error = err.Error()
+		dr.Error = err.Error()
+		c <- dr
+		return
 	}
 	_ = tx.Commit()
+	c <- dr
 }
 
+// InsertCards Ajoute les cartes au deck
 func InsertCards(dr models.DeckRequest, tx *sql.Tx) error {
 	var index = 1
 
 	deckAmount := dr.CardAmount / 52
 	if dr.Joker {
 		deckAmount = dr.CardAmount / 54
-		for i := 0; i <= deckAmount; i++ {
-			if err := insertCard(tx, dr.DeckId.String(), "0sc", "/static/0sc.svg", "sc", index, 0); err != nil {
+		for i := 1; i <= deckAmount; i++ {
+			if err := insertCard(tx, dr.DeckId.String(), "0jr", "/static/0jr.svg", "sc", index, 0); err != nil {
 				return fmt.Errorf("une carte joker n'a pas plus être ajouté: %w", err)
 			}
 			index++
-			if err := insertCard(tx, dr.DeckId.String(), "0dh", "/static/0dh.svg", "dh", index, 0); err != nil {
+			if err := insertCard(tx, dr.DeckId.String(), "0jn", "/static/0jn.svg", "dh", index, 0); err != nil {
 				return fmt.Errorf("une carte joker n'a pas plus être ajouté: %w", err)
 			}
 			index++
@@ -83,6 +93,7 @@ func InsertCards(dr models.DeckRequest, tx *sql.Tx) error {
 	return fmt.Errorf("")
 }
 
+// ajoute les cartes
 func insertCard(tx *sql.Tx, deckId, code, image, suit string, order int, rank int) error {
 	query, err := tx.Prepare(CREATE_CARDS)
 	if err != nil {
@@ -97,58 +108,139 @@ func insertCard(tx *sql.Tx, deckId, code, image, suit string, order int, rank in
 	return nil
 }
 
-func AddCards(c chan models.AddCard, db models.CardDeckDB, wg *sync.WaitGroup, order int) {
-	defer close(c)
-	defer wg.Done()
-	ac := <-c
-	codes := strings.Split(ac.Code, ",")
+// AddCards Ajoute des cartes que l'utilisateurs souhaitent ajouter
+func AddCards(c chan models.AddCard) {
+	cards := <-c
+	var rank = 0
+	var suit = ""
 
-	tx, _ := db.Db.Begin()
+	CheckDeck(&cards)
 
+	if cards.Error != "" {
+		c <- cards
+		return
+	}
+
+	GetHighestPriority(&cards)
+
+	codes := strings.Split(cards.NewCard, ",")
+
+	tx, err := cards.Db.Begin()
+	if err != nil {
+		cards.Error = err.Error()
+		c <- cards
+	}
 	for _, card := range codes {
 
-		query, err := db.Db.Prepare(ADD_CARD)
+		query, err := cards.Db.Prepare(ADD_CARD)
 		if err != nil {
 			_ = tx.Rollback()
-		}
-
-		_, err = query.Exec(ac.DeckId, card, "/static/"+card+".svg", string(card[0]), string(card[1]), order) // TODO: Accepter 10, 11, 12, 13
-		if err != nil {
-			_ = tx.Rollback()
-		}
-		_ = tx.Commit()
-		order++
-	}
-
-}
-
-func CheckDeck(c chan string, db models.CardDeckDB, wg *sync.WaitGroup, isGood *bool) {
-	defer close(c)
-	defer wg.Done()
-
-	tx, err := db.Db.Begin()
-	if err != nil {
-		fmt.Printf(err.Error())
-	}
-	query, err := db.Db.Prepare(HAS_DECK)
-	if err != nil {
-		_ = tx.Rollback()
-	}
-
-	result, err := query.Query(<-c)
-	if err != nil {
-		_ = tx.Rollback()
-	}
-	if result != nil {
-		row, _ := result.Columns()
-		if len(row) > 0 {
-			*isGood = true
+			cards.Error = err.Error()
+			c <- cards
 			return
 		}
+
+		if len(card) == 3 {
+			if _, err = strconv.Atoi(card[0:2]); err == nil {
+				rank, _ = strconv.Atoi(card[0:2])
+				suit = card[2:]
+			} else {
+				rank, _ = strconv.Atoi(card[0:1])
+				suit = card[1:]
+			}
+		} else {
+			rank, _ = strconv.Atoi(card[0:1])
+			suit = card[1:]
+		}
+
+		_, err = query.Exec(cards.DeckId, card, "/static/"+card+".svg", rank, suit, cards.Order)
+		if err != nil {
+			_ = tx.Rollback()
+			cards.Error = err.Error()
+			c <- cards
+			return
+		}
+		_ = tx.Commit()
+
+		cards.Card = append(cards.Card, models.Card{
+			Code:  card,
+			Image: "/static/" + card + ".svg",
+			Rank:  rank,
+			Suit:  suit,
+		})
+		cards.Order++
 	}
-	*isGood = false
+	c <- cards
 }
 
+// GetHighestPriority Trouve la plus grande priorité
+func GetHighestPriority(cards *models.AddCard) {
+
+	tx, err := cards.Db.Begin()
+	if err != nil {
+		cards.Error = err.Error()
+		return
+	}
+	query, err := cards.Db.Prepare(GET_HIGHEST_PRIORITY)
+	if err != nil {
+		_ = tx.Rollback()
+		cards.Error = err.Error()
+		return
+	}
+	result, err := query.Query(cards.DeckId)
+	if err != nil {
+		_ = tx.Rollback()
+		cards.Error = err.Error()
+		return
+	}
+
+	for result.Next() {
+		err = result.Scan(&cards.Order)
+		if err != nil {
+			cards.Error = err.Error()
+			break
+		}
+	}
+	cards.Order++
+	query.Close()
+	result.Close()
+}
+
+// CheckDeck Vérifie que le deck existe
+func CheckDeck(card *models.AddCard) {
+
+	tx, err := card.Db.Begin()
+	if err != nil {
+		card.Error = err.Error()
+		return
+	}
+	query, err := card.Db.Prepare(HAS_DECK)
+	if err != nil {
+		_ = tx.Rollback()
+		card.Error = err.Error()
+		return
+	}
+
+	result, err := query.Query(card.DeckId)
+	if err != nil {
+		_ = tx.Rollback()
+		card.Error = err.Error()
+		return
+	}
+	if result != nil {
+		var res = 0
+		for result.Next() {
+			result.Scan(&res)
+		}
+		if res > 0 {
+			return
+		} else {
+			card.Error = "le deck n'existe pas"
+		}
+	}
+}
+
+// DrawCard Pige une carte
 func DrawCard(c chan models.DrawCardRequest, db *sql.DB) {
 	deck := <-c
 
@@ -184,6 +276,7 @@ func DrawCard(c chan models.DrawCardRequest, db *sql.DB) {
 	c <- deck
 }
 
+// Trouve la carte à piger
 func getCard(tx *sql.Tx, dcr *models.DrawCardRequest) {
 	var card = 1
 	query, err := tx.Prepare(DRAW_CARD)
@@ -227,23 +320,12 @@ func getCard(tx *sql.Tx, dcr *models.DrawCardRequest) {
 	}
 }
 
+// ShuffleDeck Mélange le deck
 func ShuffleDeck(c chan models.ShuffleRequest) {
 	var mu sync.Mutex
 	shuffle := <-c
-	var indexList []int
-	var remaining = 0
-	var goodNumber = false
 
-	/*
-		_, err := shuffle.Db.Exec(`PRAGMA journal_mode = WAL`)
-		if err != nil {
-			log.Fatal("Failed to set WAL mode:", err)
-		}
-
-		_, err = shuffle.Db.Exec(`PRAGMA busy_timeout = 30000`)
-		if err != nil {
-			log.Fatal("Failed to set busy timeout:", err)
-		}*/
+	var cardList []string
 
 	mu.Lock()
 	tx, err := shuffle.Db.Begin()
@@ -252,8 +334,7 @@ func ShuffleDeck(c chan models.ShuffleRequest) {
 		c <- shuffle
 		return
 	}
-
-	query, err := tx.Prepare(GET_REMAINING)
+	query, err := shuffle.Db.Prepare(GET_UNDRAWED_CARDS)
 	if err != nil {
 		shuffle.ErrorMsg = err.Error()
 		c <- shuffle
@@ -266,60 +347,22 @@ func ShuffleDeck(c chan models.ShuffleRequest) {
 		c <- shuffle
 		return
 	}
-
-	for result.Next() {
-		err := result.Scan(&remaining)
-		if err != nil {
-			return
-		}
-	}
-	_ = tx.Commit()
-	mu.Unlock()
-	mu.Lock()
-	tx, err = shuffle.Db.Begin()
-	if err != nil {
-		shuffle.ErrorMsg = err.Error()
-		c <- shuffle
-		return
-	}
-	query, err = shuffle.Db.Prepare(GET_UNDRAWED_CARDS)
-	if err != nil {
-		shuffle.ErrorMsg = err.Error()
-		c <- shuffle
-		return
-	}
-
-	result, err = query.Query(shuffle.DeckId)
-	if err != nil {
-		shuffle.ErrorMsg = err.Error()
-		c <- shuffle
-		return
-	}
 	_ = tx.Commit()
 	mu.Unlock()
 	for result.Next() {
 		var card = ""
 		err := result.Scan(&card)
-		var index = 0
-		goodNumber = false
-		for !goodNumber {
-			index = rand.Intn(remaining) + 1
-
-			if len(indexList) == 0 {
-				indexList = append(indexList, index)
-				goodNumber = true
-				break
-			}
-
-			for _, i := range indexList {
-				if i == index {
-					goodNumber = false
-				} else {
-					indexList = append(indexList, index)
-					goodNumber = true
-				}
-			}
+		cardList = append(cardList, card)
+		if err != nil {
+			shuffle.ErrorMsg = err.Error()
+			c <- shuffle
+			return
 		}
+	}
+	var indexList = utils.MakeRange(1, len(cardList))
+	var index = 0
+	shuffle.Remaining = len(cardList)
+	for _, card := range cardList {
 
 		tx, err = shuffle.Db.Begin()
 		if err != nil {
@@ -333,90 +376,151 @@ func ShuffleDeck(c chan models.ShuffleRequest) {
 			c <- shuffle
 			return
 		}
-		_, err = query.Exec(index, card)
+		println(len(indexList))
+		if len(indexList) == 0 {
+			c <- shuffle
+			return
+		} else {
+			index = rand.Intn(len(indexList))
+		}
+
+		_, err = query.Exec(indexList[index], card)
 		if err != nil {
 			shuffle.ErrorMsg = err.Error()
 			c <- shuffle
 			return
 		}
-		query.Close()
-		tx.Commit()
-
+		indexList = RemoveIndex(indexList, index)
+		_ = tx.Commit()
 	}
 	shuffle.Response = "Le paquet a été mélangé"
 
 	c <- shuffle
 }
 
-func GetPriority(c chan string, db models.CardDeckDB, wg *sync.WaitGroup, hasPriority *bool) {
-	defer close(c)
-	defer wg.Done()
-	tx, err := db.Db.Begin()
-	if err != nil {
-		fmt.Printf(err.Error())
-	}
-	query, err := db.Db.Prepare(HAS_PRIORITY)
-	if err != nil {
-		_ = tx.Rollback()
-	}
-	result, err := query.Query(<-c)
-	if err != nil {
-		_ = tx.Rollback()
-		return
-	}
-	for result.Next() {
-		var priority = 0
-		err := result.Scan(priority)
-		if err != nil {
-			return
-		}
-		if priority != 0 {
-			*hasPriority = true
-		}
-	}
+// RemoveIndex Retire un index
+func RemoveIndex(s []int, index int) []int {
+	return append(s[:index], s[index+1:]...)
 }
 
-func GetHighestPriority(c chan string, db models.CardDeckDB, wg *sync.WaitGroup, order *int) {
-	defer close(c)
-	defer wg.Done()
+// ShowDrawCard Renvoie les informations des cartes pigé
+func ShowDrawCard(c chan models.ShowDrawRequest) {
+	cards := <-c
 
-	tx, err := db.Db.Begin()
+	tx, err := cards.Bd.Begin()
 	if err != nil {
-		fmt.Printf(err.Error())
-	}
-	query, err := db.Db.Prepare(GET_HIGHEST_PRIORITY)
-	if err != nil {
-		_ = tx.Rollback()
-	}
-	result, err := query.Query(<-c)
-	if err != nil {
-		_ = tx.Rollback()
+		cards.Error = err.Error()
+		c <- cards
 		return
 	}
 
+	query, err := tx.Prepare(GET_DRAW_CARD)
+	if err != nil {
+		cards.Error = err.Error()
+		c <- cards
+		return
+	}
+
+	result, err := query.Query(cards.DeckId)
+	if err != nil {
+		cards.Error = err.Error()
+		c <- cards
+		return
+	}
+	var index = 1
 	for result.Next() {
-		err = result.Scan(order)
+		if index > cards.NbCard {
+			break
+		}
+		var tempCard models.Card
+		err := result.Scan(&tempCard.Code, &tempCard.Image, &tempCard.Rank, &tempCard.Suit, &tempCard.Date)
 		if err != nil {
+			cards.Error = err.Error()
+			c <- cards
 			return
 		}
-	}
-}
-
-/*
-func HasRemaining(c chan models.AddCard, db *CardDeckDB, wg *sync.WaitGroup, cardRemaining *bool) bool {
-	defer wg.Done()
-
-	r := <-c
-
-	tx, _ := db.db.Begin()
-	query, err := db.db.Prepare(HAS_REMAINING)
-	if err != nil {
-		_ = tx.Rollback()
-	}
-	_, err = query.Exec(r.DeckId, r.Code)
-	if err != nil {
-		_ = tx.Rollback()
+		cards.Response = append(cards.Response, tempCard)
+		index++
 	}
 	_ = tx.Commit()
-	return false
-}*/
+	c <- cards
+}
+
+// ShowUndrawCard Renvoie les informations des cartes pas encore pigé
+func ShowUndrawCard(c chan models.ShowDrawRequest) {
+	cards := <-c
+	tx, err := cards.Bd.Begin()
+	if err != nil {
+		cards.Error = err.Error()
+		c <- cards
+		return
+	}
+
+	query, err := tx.Prepare(DRAW_CARD)
+	if err != nil {
+		cards.Error = err.Error()
+		c <- cards
+		return
+	}
+
+	result, err := query.Query(cards.DeckId)
+	if err != nil {
+		cards.Error = err.Error()
+		c <- cards
+		return
+	}
+	var index = 1
+	for result.Next() {
+		if index > cards.NbCard {
+			break
+		}
+		var tempCard models.Card
+		var id = 0
+		err := result.Scan(&id, &tempCard.Code, &tempCard.Image, &tempCard.Rank, &tempCard.Suit)
+		if err != nil {
+			cards.Error = err.Error()
+			c <- cards
+			return
+		}
+		cards.Response = append(cards.Response, tempCard)
+		index++
+	}
+	_ = tx.Commit()
+	c <- cards
+}
+
+// GetImage Renvoie le chemin ou l'image est
+func GetImage(c chan models.ShowCardRequest) {
+	card := <-c
+	tx, err := card.Bd.Begin()
+	if err != nil {
+		card.Error = err.Error()
+		c <- card
+		return
+	}
+
+	query, err := tx.Prepare(GET_IMAGE_PATH)
+	if err != nil {
+		card.Error = err.Error()
+		c <- card
+		return
+	}
+
+	result, err := query.Query(card.Code)
+	if err != nil {
+		card.Error = err.Error()
+		c <- card
+		return
+	}
+
+	for result.Next() {
+		err := result.Scan(&card.Image)
+		if err != nil {
+			card.Error = err.Error()
+			c <- card
+			return
+		}
+		break
+	}
+	c <- card
+}

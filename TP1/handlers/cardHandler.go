@@ -15,65 +15,39 @@ import (
 
 // /deck/{deckid}/add/?cards={cards}
 func AddMoreCards(w http.ResponseWriter, r *http.Request) {
-	var wg sync.WaitGroup
-	var errs = ""
-	Db, _ := database.DbCreation()
+	var mu sync.Mutex
 	var vars = mux.Vars(r)
 	var deckId, _ = uuid.Parse(vars["deckid"])
 	url := r.URL.Query().Get("cards")
 	url = strings.Trim(url, "")
 	cards := strings.Split(url, ",")
-	dc := make(chan string)
-	cc := make(chan models.AddCard)
-	var ac models.AddCard
-	var order = 0
-	var db = models.CardDeckDB{
-		Db: Db,
-	}
+	var addCard models.AddCard
+	var db, _ = database.DbCreation()
+
+	var c = make(chan models.AddCard)
+
 	for card := range cards {
 		if !utils.CheckCard(cards[card]) {
-			errs += "\nUne carte ne respecte pas la syntaxe (6h, si joker: 0sc)\n"
+			addCard.Error = "Une carte ne respecte pas la syntaxe (6h, si joker: 0sc)"
 		}
 	}
-	if errs == "" {
-		ac = models.AddCard{
-			DeckId: deckId,
-			Code:   url,
-		}
+	if addCard.Error == "" {
+		addCard.DeckId = deckId
+		addCard.Db = db
+		addCard.NewCard = url
+
+		mu.Lock()
+		go database.AddCards(c)
+		mu.Unlock()
+
+		c <- addCard
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(<-c)
+		return
 	}
-
-	go func() {
-		dc <- deckId.String()
-	}()
-
-	go func() {
-		cc <- ac
-	}()
-
-	if len(errs) < 0 {
-		wg.Add(1)
-		var isGood = false
-		go database.CheckDeck(dc, db, &wg, &isGood)
-		if isGood {
-			errs += "Aucun paquet n'est lié a se deckId"
-		}
-		wg.Wait()
-	}
-
-	if errs == "" {
-
-		wg.Add(1)
-		go database.GetHighestPriority(dc, db, &wg, &order)
-		wg.Wait()
-		order++
-		wg.Add(1)
-		go database.AddCards(cc, db, &wg, order)
-		wg.Wait()
-		_, _ = w.Write([]byte("Cartes ajoutées"))
-	} else {
-		_, _ = w.Write([]byte(errs))
-	}
-
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(addCard.Error)
 }
 
 // /deck/{deckid}/draw/{nbrCarte:1}
@@ -101,7 +75,9 @@ func Draw(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	mu.Unlock()
+
 	response := <-cr
+
 	w.Header().Set("Content-Type", "application/json")
 	err := json.NewEncoder(w).Encode(response.Reponse)
 	if err != nil {
@@ -109,6 +85,7 @@ func Draw(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Shuffle Mélange les cartes
 func Shuffle(w http.ResponseWriter, r *http.Request) {
 	var mu sync.Mutex
 	var vars = mux.Vars(r)
@@ -129,4 +106,97 @@ func Shuffle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+}
+
+// ShowDrawCard Affiche les cartes pigé
+func ShowDrawCard(w http.ResponseWriter, r *http.Request) {
+	var mu sync.Mutex
+	var vars = mux.Vars(r)
+	var deckId, _ = uuid.Parse(vars["deckid"])
+	var nbCard, _ = strconv.Atoi(vars["nbCard"])
+	db, _ := database.DbCreation()
+	cr := make(chan models.ShowDrawRequest)
+
+	if nbCard > 0 {
+		mu.Lock()
+		go database.ShowDrawCard(cr)
+		cr <- models.ShowDrawRequest{
+			DeckId: deckId,
+			Bd:     db,
+			NbCard: nbCard,
+		}
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		err := json.NewEncoder(w).Encode(<-cr)
+		if err != nil {
+			return
+		}
+	}
+}
+
+// ShowUndrawCard Affiche les cartes pas encore pigé
+func ShowUndrawCard(w http.ResponseWriter, r *http.Request) {
+	var mu sync.Mutex
+	var vars = mux.Vars(r)
+	var deckId, _ = uuid.Parse(vars["deckid"])
+	var nbCard, _ = strconv.Atoi(vars["nbCard"])
+	db, _ := database.DbCreation()
+	cr := make(chan models.ShowDrawRequest)
+
+	if nbCard > 0 {
+		mu.Lock()
+		go database.ShowUndrawCard(cr)
+		cr <- models.ShowDrawRequest{
+			DeckId: deckId,
+			Bd:     db,
+			NbCard: nbCard,
+		}
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		err := json.NewEncoder(w).Encode(<-cr)
+		if err != nil {
+			return
+		}
+	}
+}
+
+// ShowCard Montre les cartes
+func ShowCard(w http.ResponseWriter, r *http.Request) {
+	var mu sync.Mutex
+	var vars = mux.Vars(r)
+	var code, _ = vars["code"]
+	db, _ := database.DbCreation()
+	c := make(chan models.ShowCardRequest)
+
+	if code == "back" {
+		ShowBack(w, r)
+		return
+	}
+
+	mu.Lock()
+	go database.GetImage(c)
+	c <- models.ShowCardRequest{
+		Code: strings.Split(code, ".")[0],
+		Bd:   db,
+	}
+	mu.Unlock()
+	image := <-c
+	if image.Error != "" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(image.Error)
+		return
+	}
+
+	path := strings.Replace(image.Image, "/", "", 1)
+
+	w.Header().Set("Content-Type", "image/svg+xml")
+	http.ServeFile(w, r, path)
+}
+
+// ShowBack Affiche la carte de dos
+func ShowBack(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	http.ServeFile(w, r, "static/back.svg")
 }

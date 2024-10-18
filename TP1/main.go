@@ -11,26 +11,24 @@ import (
 	"net/http"
 )
 
-//TODO: /deck/{deckid}/shuffle
-
-//TODO: /deck/{deckid}/show/0/{nbrCarte:1}
-
-//TODO: /deck/{deckid}/show/1/{nbrCarte:1}
-
-//TODO: /static/{code}.svg
-
-//TODO: /static/back.svg
-
-//TODO: /deck/{deckid}/draw/{nbrCarte:1}
-
 func requestHandler() {
 	r := mux.NewRouter()
 
+	// Créer un nouveau paquet
 	r.HandleFunc("/deck/new/{nbDeck}/{jokers:false}", handlers.NewDeck).Methods("GET")
 	r.HandleFunc("/deck/new/{nbDeck}/{jokers:true}", handlers.NewDeck).Methods("GET")
+	// Ajouter une carte
 	r.HandleFunc("/deck/{deckid}/add", handlers.AddMoreCards).Methods("GET")
+	// Piger une carte
 	r.HandleFunc("/deck/{deckid}/draw/{nbCard}", handlers.Draw).Methods("GET")
+	// Mélanger le paquet
 	r.HandleFunc("/deck/{deckid}/shuffle", handlers.Shuffle).Methods("GET")
+	// Afficher les cartes déjà pigé
+	r.HandleFunc("/deck/{deckid}/show/0/{nbCard}", handlers.ShowDrawCard).Methods("GET")
+
+	r.HandleFunc("/deck/{deckid}/show/1/{nbCard}", handlers.ShowUndrawCard).Methods("GET")
+	r.HandleFunc("/static/{code}.svg", handlers.ShowCard).Methods("GET")
+
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
 
