@@ -1,0 +1,10 @@
+SERVER:
+100 -> clé signature server 
+101 -> reponse
+199 -> mauvais packet
+
+CLIENT:
+0 -> authentificaton
+10 -> gameRequest
+98 -> exit
+99 -> mauvais packet
