@@ -17,8 +17,9 @@ import (
 )
 
 type GameResponse struct {
-	gameUUID string
-	gameFEN  string
+	gameUUID      string
+	gameFEN       string
+	encryptionKey string
 }
 
 func (gr GameResponse) encode(serverKey string) []byte {
@@ -29,9 +30,11 @@ func (gr GameResponse) encode(serverKey string) []byte {
 	gameUUIDByte := buildSubTLV(131, []byte(gr.gameUUID))
 
 	gameFENByte := buildSubTLV(132, []byte(chess.NewGame(fen).Position().Board().Draw()))
-	signatureByte := buildSubTLV(3, []byte(signMessage(serverKey, gr.gameUUID+chess.NewGame(fen).Position().Board().Draw())))
+	keyByte := buildSubTLV(4, []byte(gr.encryptionKey))
+	signatureByte := buildSubTLV(3, []byte(signMessage(serverKey, gr.gameUUID+chess.NewGame(fen).Position().Board().Draw()+gr.encryptionKey)))
 
 	binary.Write(&gameUUIDByte, binary.BigEndian, gameFENByte.Bytes())
+	binary.Write(&gameUUIDByte, binary.BigEndian, keyByte.Bytes())
 	binary.Write(&gameUUIDByte, binary.BigEndian, signatureByte.Bytes())
 	return gameUUIDByte.Bytes()
 }
@@ -47,54 +50,66 @@ type GameActionResponse struct {
 	err          string
 }
 
-func (gar GameActionResponse) encode(serverKey string) []byte {
+func (gar GameActionResponse) encode(serverKey string, encryptionKey string) []byte {
+	response := new(bytes.Buffer)
 	fen, err := chess.FEN(gar.gameFEN)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 	board := chess.NewGame(fen).Position().Board().Draw()
-	accumulatedData := string(gar.action) + gar.gameUUID + board
 
-	value := buildSubTLV(141, []byte{gar.action})
+	action := buildSubTLV(141, []byte{gar.action})
 	gameUUIDByte := buildSubTLV(131, []byte(gar.gameUUID))
 	gameBoardByte := buildSubTLV(132, []byte(board))
-	binary.Write(&value, binary.BigEndian, gameUUIDByte.Bytes())
-	binary.Write(&value, binary.BigEndian, gameBoardByte.Bytes())
+	signatureData := string(gar.action) + gar.gameUUID + board
+	accumulatedData := action.String() + gameUUIDByte.String() + gameBoardByte.String()
+	//binary.Write(&value, binary.BigEndian, gameUUIDByte.Bytes())
+	//binary.Write(&value, binary.BigEndian, gameBoardByte.Bytes())
 
 	switch gar.action {
 	case MOVE_RESPONSE:
 		moveResponseByte := buildSubTLV(142, []byte(gar.moveResponse))
 		serverMoveByte := buildSubTLV(143, []byte(gar.serverMove))
-		binary.Write(&value, binary.BigEndian, moveResponseByte.Bytes())
-		binary.Write(&value, binary.BigEndian, serverMoveByte.Bytes())
-		accumulatedData += gar.moveResponse + gar.serverMove
+
+		//binary.Write(&value, binary.BigEndian, moveResponseByte.Bytes())
+		//binary.Write(&value, binary.BigEndian, serverMoveByte.Bytes())
+		accumulatedData += moveResponseByte.String() + serverMoveByte.String()
+		signatureData += gar.moveResponse + gar.serverMove
 	case GAME_OUTCOME:
 		moveResponseByte := buildSubTLV(142, []byte(gar.moveResponse))
 		if gar.serverMove != "" {
 			serverMoveByte := buildSubTLV(142, []byte(gar.serverMove))
-			binary.Write(&value, binary.BigEndian, serverMoveByte.Bytes())
-			accumulatedData += gar.serverMove
+			//binary.Write(&value, binary.BigEndian, serverMoveByte.Bytes())
+			accumulatedData += serverMoveByte.String()
+			signatureData += gar.serverMove
 		}
 		outcomeByte := buildSubTLV(144, []byte(gar.outcome))
-		binary.Write(&value, binary.BigEndian, outcomeByte.Bytes())
-		binary.Write(&value, binary.BigEndian, moveResponseByte.Bytes())
-		accumulatedData += gar.outcome
-		accumulatedData += gar.moveResponse
+		//binary.Write(&value, binary.BigEndian, outcomeByte.Bytes())
+		//binary.Write(&value, binary.BigEndian, moveResponseByte.Bytes())
+		accumulatedData += outcomeByte.String() + moveResponseByte.String()
+		signatureData += gar.outcome + gar.moveResponse
 	case ERROR:
 		errorByte := buildSubTLV(199, []byte(gar.err))
 		if gar.bestMove != "" {
 			bestMoveByte := buildSubTLV(145, []byte(gar.bestMove))
-			binary.Write(&value, binary.BigEndian, bestMoveByte.Bytes())
-			accumulatedData += gar.bestMove
+			//binary.Write(&value, binary.BigEndian, bestMoveByte.Bytes())
+			accumulatedData += bestMoveByte.String()
+			signatureData += gar.bestMove
 		}
-		binary.Write(&value, binary.BigEndian, errorByte.Bytes())
-		accumulatedData += gar.err
+		//binary.Write(&value, binary.BigEndian, errorByte.Bytes())
+		accumulatedData += errorByte.String()
+		signatureData += gar.err
 	}
-	signature := signMessage(serverKey, accumulatedData)
+	signature := signMessage(serverKey, signatureData)
 	signatureByte := buildSubTLV(3, []byte(signature))
-	binary.Write(&value, binary.BigEndian, signatureByte.Bytes())
-
-	return value.Bytes()
+	accumulatedData += signatureByte.String()
+	//binary.Write(&value, binary.BigEndian, signatureByte.Bytes())
+	accumulatedData, err = Encrypt(accumulatedData, encryptionKey)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	binary.Write(response, binary.BigEndian, []byte(accumulatedData))
+	return response.Bytes()
 }
 
 func main() {
@@ -200,6 +215,7 @@ func handleTLVTCP(conn net.Conn, data []byte, serverKey *string, clientKey *stri
 
 func UDPServer(wg *sync.WaitGroup) {
 	connectedClients := make(map[string]*net.UDPAddr)
+	onGoingGame := make(map[string]string)
 	defer wg.Done()
 	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:8001")
 	if err != nil {
@@ -223,11 +239,11 @@ func UDPServer(wg *sync.WaitGroup) {
 			return
 		}
 
-		handleTLVUDP(conn, addr, buffer, &connectedClients)
+		handleTLVUDP(conn, addr, buffer, &connectedClients, &onGoingGame)
 	}
 }
 
-func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUsers *map[string]*net.UDPAddr) {
+func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUsers *map[string]*net.UDPAddr, onGoingGame *map[string]string) {
 	var serverKey string
 	var clientKey string
 	if len(data) < 3 {
@@ -286,7 +302,7 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 		gameUUID := ""
 		var gameType byte
 
-		parseSubTLV(value, func(subTag byte, subValue []byte) {
+		parseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
 			switch subTag {
 
 			case 3: // Signature
@@ -310,11 +326,17 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 			}
 		})
 		serverKey, clientKey = getKeys(client)
+		encryptionKey, err := GenerateKey()
+		if err != nil {
+			fmt.Println(err.Error())
+		}
 		if gameType == SOLO {
 			gr := GameResponse{
-				gameUUID: createSoloGame("solo", client),
-				gameFEN:  getGame(gameUUID),
+				gameUUID:      createSoloGame("solo", client, encryptionKey),
+				gameFEN:       getGame(gameUUID),
+				encryptionKey: encryptionKey,
 			}
+			(*onGoingGame)[gr.gameUUID] = client
 			_, err := conn.WriteToUDP(buildTLV(130, gr.encode(serverKey)), addr)
 			if err != nil {
 				fmt.Println(err.Error())
@@ -336,7 +358,14 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 		client := ""
 		accumulatedData := ""
 
-		parseSubTLV(value, func(subTag byte, subValue []byte) {
+		client, _ = mapkey((*connectedUsers), addr)
+		gameUUID, _ = mapKeyString((*onGoingGame), client)
+		key := getEncryptionKey(client, gameUUID)
+		value, err := Decrypt(string(value), key)
+		if err != nil {
+			fmt.Println(err.Error())
+		}
+		parseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
 			switch subTag {
 			case 3: // Signature
 				signature += string(subValue)
@@ -344,13 +373,11 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 				action = subValue[0]
 				accumulatedData += string(action)
 			case 13: // Client
-				client += string(subValue)
 				accumulatedData += client
 			case 41: // Déplacement
 				move += string(subValue)
 				accumulatedData += move
 			case 42: // gameUUID
-				gameUUID += string(subValue)
 				accumulatedData += gameUUID
 			}
 		})
@@ -361,7 +388,7 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 			var response GameActionResponse
 			var serverMove string = ""
 			switch action {
-			case MOVE:
+			case MOVE: // Action de jouer un coup
 				newFen, bestMove, err := verifyMove(getGame(gameUUID), move, gameUUID)
 				if err != nil {
 					fmt.Println(err.Error())
@@ -370,13 +397,14 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 				}
 
 				isFinished, outcome := checkGameOutcome(newFen, gameUUID)
+				if Database.GetPlayerSId(gameUUID) != -1 {
 
-				if !isFinished && err == nil {
+				} else if !isFinished && err == nil && Database.GetPlayerSId(gameUUID) == -1 {
 					newFen, serverMove = playServerTurn(newFen, gameUUID)
 					isFinished, outcome = checkGameOutcome(newFen, gameUUID)
 				}
 
-				if err != nil {
+				if err != nil { // Erreur
 					response = GameActionResponse{
 						action:   ERROR,
 						gameUUID: gameUUID,
@@ -384,7 +412,7 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 						bestMove: bestMove,
 						err:      moveError,
 					}
-				} else if isFinished {
+				} else if isFinished { // Partie terminée
 					response = GameActionResponse{
 						action:       GAME_OUTCOME,
 						gameUUID:     gameUUID,
@@ -394,7 +422,7 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 						err:          moveError,
 						outcome:      outcome,
 					}
-				} else {
+				} else { // Coup a été joué
 					response = GameActionResponse{
 						action:       MOVE_RESPONSE,
 						gameUUID:     gameUUID,
@@ -404,7 +432,7 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, connectedUs
 						err:          moveError,
 					}
 				}
-				_, err = conn.WriteToUDP(buildTLV(140, response.encode(serverKey)), addr)
+				_, err = conn.WriteToUDP(buildTLV(140, response.encode(serverKey, getEncryptionKey(client, gameUUID))), addr)
 				if err != nil {
 					fmt.Println(err.Error())
 				}
@@ -510,13 +538,9 @@ func getMenu(name string) string {
 	return menu + Database.GetAvailablePLayer(name)
 }
 
-func createSoloGame(gameType string, client string) string {
+func createSoloGame(gameType string, client string, encryptionKey string) string {
 	game := chess.NewGame()
 	gameUUID := generateUUID()
-	encryptionKey, err := GenerateKey()
-	if err != nil {
-		fmt.Println(err.Error())
-	}
 
 	if gameType == "solo" {
 		Database.InsertNewGame(game.FEN(), ONGOING, Database.GetUserId(client), gameUUID, encryptionKey)
@@ -612,11 +636,24 @@ func checkGameOutcome(fen string, gameUUID string) (bool, string) {
 	}
 	switch game.Outcome() {
 	case chess.BlackWon:
+		Database.UpdateGameStatus(FINISHED, gameUUID)
 		return true, "Les noirs ont gagné par " + game.Method().String() + " !"
 	case chess.WhiteWon:
+		Database.UpdateGameStatus(FINISHED, gameUUID)
 		return true, "Les blancs ont gagné par " + game.Method().String() + " !"
 	case chess.Draw:
+		Database.UpdateGameStatus(FINISHED, gameUUID)
 		return true, "La partie est nulle !"
 	}
+	Database.UpdateGameStatus(FINISHED, gameUUID)
 	return true, game.Outcome().String()
+}
+
+func getEncryptionKey(client string, gameUUID string) string {
+	playerS := Database.GetPlayerSId(gameUUID)
+
+	if playerS == Database.GetUserId(client) {
+		return Database.GetPlayerSKey(gameUUID)
+	}
+	return Database.GetPlayerPKey(gameUUID)
 }

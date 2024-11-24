@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS games (
     fen TEXT NOT NULL,
     status INTEGER NOT NULL,
     player_P INTEGER NOT NULL,
-    player_S INTEGER,
+    player_S INTEGER DEFAULT -1,
     uuid TEXT NOT NULL,
     player_p_key TEXT,
     player_s_key TEXT

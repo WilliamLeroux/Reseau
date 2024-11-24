@@ -9,15 +9,6 @@ import (
 	"io"
 )
 
-func GenerateKey() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	key := hex.EncodeToString(bytes)
-	return key, nil
-}
-
 func Encrypt(message string, encryptionKey string) (string, error) {
 	key, err := hex.DecodeString(encryptionKey)
 	if err != nil {
@@ -41,6 +32,7 @@ func Encrypt(message string, encryptionKey string) (string, error) {
 	}
 
 	cipherText := gcm.Seal(nonce, nonce, text, nil)
+
 	return fmt.Sprintf("%x", cipherText), nil
 }
 

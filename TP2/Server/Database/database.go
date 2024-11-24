@@ -321,3 +321,154 @@ func UpdateGame(fen string, uuid string) {
 	}
 	_ = tx.Commit()
 }
+
+func GetPlayerPId(gameUUID string) int {
+	id := -1
+	db, err := dbCreation()
+
+	if err != nil {
+		return id
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return id
+	}
+	query, err := db.Prepare(GET_PLAYER_P_ID)
+	if err != nil {
+		_ = tx.Rollback()
+		return id
+	}
+
+	result, err := query.Query(gameUUID)
+	if err != nil {
+		_ = tx.Rollback()
+		return id
+	}
+	if result != nil {
+
+		for result.Next() {
+			result.Scan(&id)
+
+		}
+	}
+	return id
+}
+
+func GetPlayerSId(gameUUID string) int {
+	id := -1
+	db, err := dbCreation()
+
+	if err != nil {
+		return id
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return id
+	}
+	query, err := db.Prepare(GET_PLAYER_S_ID)
+	if err != nil {
+		_ = tx.Rollback()
+		return id
+	}
+
+	result, err := query.Query(gameUUID)
+	if err != nil {
+		_ = tx.Rollback()
+		return id
+	}
+	if result != nil {
+
+		for result.Next() {
+			result.Scan(&id)
+
+		}
+	}
+	return id
+}
+
+func GetPlayerPKey(gameUUID string) string {
+	key := ""
+	db, err := dbCreation()
+
+	if err != nil {
+		return key
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return key
+	}
+	query, err := db.Prepare(GET_PLAYER_P_KEY)
+	if err != nil {
+		_ = tx.Rollback()
+		return key
+	}
+
+	result, err := query.Query(gameUUID)
+	if err != nil {
+		_ = tx.Rollback()
+		return key
+	}
+	if result != nil {
+
+		for result.Next() {
+			result.Scan(&key)
+
+		}
+	}
+	return key
+}
+
+func GetPlayerSKey(gameUUID string) string {
+	key := ""
+	db, err := dbCreation()
+
+	if err != nil {
+		return key
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return key
+	}
+	query, err := db.Prepare(GET_PLAYER_S_KEY)
+	if err != nil {
+		_ = tx.Rollback()
+		return key
+	}
+
+	result, err := query.Query(gameUUID)
+	if err != nil {
+		_ = tx.Rollback()
+		return key
+	}
+	if result != nil {
+
+		for result.Next() {
+			result.Scan(&key)
+
+		}
+	}
+	return key
+}
+
+func UpdateGameStatus(status int, gameUUID string) {
+	db, err := dbCreation()
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+	tx, _ := db.Begin()
+
+	query, err := db.Prepare(UPDATE_GAME_STATUS)
+	if err != nil {
+		_ = tx.Rollback()
+		fmt.Println(err.Error())
+		return
+	}
+	_, err = query.Exec(status, gameUUID)
+	if err != nil {
+		_ = tx.Rollback()
+		fmt.Println(err.Error())
+		return
+	}
+	_ = tx.Commit()
+}

@@ -38,23 +38,28 @@ type GameTurn struct {
 	client   string
 }
 
-func (gt GameTurn) Encode(clientKey string) []byte {
-	value := buildTLV(10, []byte{gt.action})
+func (gt GameTurn) Encode(clientKey string, encryptionKey string) []byte {
+	request := new(bytes.Buffer)
+	action := buildTLV(10, []byte{gt.action})
 	moveByte := buildTLV(41, []byte(gt.move))
 	gameByte := buildTLV(42, []byte(gt.gameUUID))
 	clientByte := buildTLV(13, []byte(gt.client))
 	signature := buildTLV(3, []byte(signMessage(clientKey, string(gt.action)+gt.move+gt.gameUUID+gt.client)))
+	fmt.Println(signMessage(clientKey, string(gt.action)+gt.move+gt.gameUUID+gt.client))
+	accumulatedData := action.String() + moveByte.String() + gameByte.String() + clientByte.String() + signature.String()
+	accumulatedData, err := Encrypt(accumulatedData, encryptionKey)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
 
-	binary.Write(&value, binary.BigEndian, moveByte.Bytes())
-	binary.Write(&value, binary.BigEndian, gameByte.Bytes())
-	binary.Write(&value, binary.BigEndian, clientByte.Bytes())
-	binary.Write(&value, binary.BigEndian, signature.Bytes())
-	return value.Bytes()
+	binary.Write(request, binary.BigEndian, []byte(accumulatedData))
+	return request.Bytes()
 }
 
 func main() {
 	var serverKey string
 	var clientKey string
+	var encryptionKey string
 	var gameUUID string
 	var inGame bool = false
 	var t byte = 1
@@ -93,7 +98,7 @@ func main() {
 		}
 
 		tag, value := parseTLV(buffer[:n])
-		handleTLV(tag, value, &serverKey, &gameUUID, &inGame)
+		handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame)
 		fmt.Print("> ")
 		message, err := messageReader.ReadString('\n')
 		if err != nil {
@@ -117,7 +122,7 @@ func main() {
 					gameUUID: gameUUID,
 					client:   os.Args[3],
 				}
-				sendTLV(conn, t, gt.Encode(clientKey))
+				sendTLV(conn, t, gt.Encode(clientKey, encryptionKey))
 			}
 			if strings.Contains(message, " ") {
 				splittedMessage := strings.Split(message, " ")
@@ -177,7 +182,7 @@ func parseTLV(data []byte) (byte, []byte) {
 	return tag, data[3 : 3+length]
 }
 
-func handleTLV(tag byte, data []byte, serverKey *string, gameUUID *string, inGame *bool) {
+func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, gameUUID *string, inGame *bool) {
 	switch tag {
 	case 100: // Auth
 		*serverKey = string(data)
@@ -200,6 +205,9 @@ func handleTLV(tag byte, data []byte, serverKey *string, gameUUID *string, inGam
 
 			case 3: // Signature
 				signature = string(subValue)
+			case 4: // Encryption key
+				*encryptionKey = string(subValue)
+				accumulatedData += *encryptionKey
 			case 131: // Game UUID
 				*gameUUID = string(subValue)
 				accumulatedData += *gameUUID
@@ -223,11 +231,16 @@ func handleTLV(tag byte, data []byte, serverKey *string, gameUUID *string, inGam
 		moveResponse := ""
 		serverMove := ""
 		var action byte
-		err := ""
+		gameErr := ""
 		outcome := ""
 		bestMove := ""
 
-		parseSubTLV(data, func(subTag byte, subValue []byte) {
+		data, err := Decrypt(string(data), *encryptionKey)
+		if err != nil {
+			fmt.Println(err.Error())
+		}
+
+		parseSubTLV([]byte(data), func(subTag byte, subValue []byte) {
 			switch subTag {
 
 			case 3: // Signature
@@ -254,14 +267,14 @@ func handleTLV(tag byte, data []byte, serverKey *string, gameUUID *string, inGam
 				bestMove = string(subValue)
 				accumulatedData += bestMove
 			case 199: // erreur
-				err = string(subValue)
-				accumulatedData += err
+				gameErr = string(subValue)
+				accumulatedData += gameErr
 			}
 		})
 		if signMessage(*serverKey, accumulatedData) == signature {
 
-			if err != "" {
-				fmt.Println("Erreur: " + err)
+			if gameErr != "" {
+				fmt.Println("Erreur: " + gameErr)
 				if bestMove != "" {
 					fmt.Println("Le meilleur coup jouable est: " + bestMove)
 					fmt.Println(board)
