@@ -221,6 +221,38 @@ func GetUserId(client string) int {
 	return id
 }
 
+func GetUserName(clientId int) string {
+	name := ""
+	db, err := dbCreation()
+
+	if err != nil {
+		return name
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return name
+	}
+	query, err := db.Prepare(GET_USER_NAME_BY_ID)
+	if err != nil {
+		_ = tx.Rollback()
+		return name
+	}
+
+	result, err := query.Query(clientId)
+	if err != nil {
+		_ = tx.Rollback()
+		return name
+	}
+	if result != nil {
+
+		for result.Next() {
+			result.Scan(&name)
+
+		}
+	}
+	return name
+}
+
 func InsertNewGame(fen string, status int, player_P int, uuid string, key string) {
 	db, err := dbCreation()
 	if err != nil {
@@ -244,7 +276,7 @@ func InsertNewGame(fen string, status int, player_P int, uuid string, key string
 	_ = tx.Commit()
 }
 
-func UpdateSecondaryPlayer(gameUUID string, client int) {
+func UpdateSecondaryPlayer(gameUUID string, client int, key string) {
 	db, err := dbCreation()
 	if err != nil {
 		fmt.Println(err.Error())
@@ -258,7 +290,7 @@ func UpdateSecondaryPlayer(gameUUID string, client int) {
 		fmt.Println(err.Error())
 		return
 	}
-	_, err = query.Exec(client, gameUUID)
+	_, err = query.Exec(client, key, gameUUID)
 	if err != nil {
 		_ = tx.Rollback()
 		fmt.Println(err.Error())
