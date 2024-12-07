@@ -66,7 +66,6 @@ func (gt GameTurn) Encode(clientKey string, encryptionKey string) []byte {
 	clientByte := buildTLV(13, []byte(gt.client))
 	signature := buildTLV(3, []byte(signMessage(clientKey, signatureData)))
 	accumulatedData := action.String() + moveByte.String() + gameByte.String() + clientByte.String() + signature.String()
-	//accumulatedData = strings.ReplaceAll(accumulatedData, "\n", "")
 	accumulatedData, err := Encrypt(accumulatedData, encryptionKey)
 	if err != nil {
 		fmt.Println(err.Error())
@@ -147,9 +146,6 @@ func main() {
 
 		t = tagManager(message)
 
-		//messageSigned := signMessage(string(clientKey), message)
-
-		//if os.Args[1] == "udp" {
 		if inGame && message != "" {
 			t = 40
 
@@ -161,41 +157,53 @@ func main() {
 			}
 			sendTLV(conn, 40, gt.Encode(clientKey, encryptionKey))
 		} else if message != "" {
-			switch message {
-			case "play":
-				fmt.Print("Écrivez le numéro correspondant à votre choix: \n1 - Solo\n2 - Multijoueur\n> ")
-				gameType, _ := messageReader.ReadString('\n')
-				gameType = strings.ReplaceAll(gameType, "\n", "")
-				switch gameType {
-				case "1":
-					soloGame = true
-					gr := GameRequest{
-						action:   PLAY,
-						gameType: SOLO,
-						client:   os.Args[3],
+			commandOk := false
+
+			for !commandOk {
+				switch message {
+				case "play":
+					responseOk := false
+					for !responseOk {
+						fmt.Print("Écrivez le numéro correspondant à votre choix: \n1 - Solo\n2 - Multijoueur\n> ")
+						gameType, _ := messageReader.ReadString('\n')
+						gameType = strings.ReplaceAll(gameType, "\n", "")
+						switch gameType {
+						case "1":
+							soloGame = true
+							responseOk = true
+							gr := GameRequest{
+								action:   PLAY,
+								gameType: SOLO,
+								client:   os.Args[3],
+							}
+							sendTLV(conn, 30, gr.Encode(clientKey))
+						case "2":
+							soloGame = false
+							responseOk = true
+							gr := GameRequest{
+								action:   PLAY,
+								gameType: PLAYER_VS_PLAYER,
+								client:   os.Args[3],
+							}
+							sendTLV(conn, 30, gr.Encode(clientKey))
+						default:
+							fmt.Println("Le choix: " + gameType + " n'est pas reconnu")
+						}
 					}
-					sendTLV(conn, 30, gr.Encode(clientKey))
-				case "2":
+				case "join":
+					fmt.Print("Entrez le UUID de la partie > ")
+					gameId, _ := messageReader.ReadString('\n')
+					gameId = strings.ReplaceAll(gameId, "\n", "")
 					soloGame = false
-					gr := GameRequest{
-						action:   PLAY,
-						gameType: PLAYER_VS_PLAYER,
+					request := GameJoinRequest{
 						client:   os.Args[3],
+						gameUUID: gameId,
 					}
-					sendTLV(conn, 30, gr.Encode(clientKey))
+					sendTLV(conn, 35, request.Encode(clientKey))
+				default:
+					fmt.Println("Commande inconnu")
+					message = utils.ReadConsole(messageReader)
 				}
-			case "join":
-				fmt.Print("Entrez le UUID de la partie > ")
-				gameId, _ := messageReader.ReadString('\n')
-				gameId = strings.ReplaceAll(gameId, "\n", "")
-				soloGame = false
-				request := GameJoinRequest{
-					client:   os.Args[3],
-					gameUUID: gameId,
-				}
-				sendTLV(conn, 35, request.Encode(clientKey))
-			default:
-				fmt.Println("Commande inconnu")
 			}
 		}
 		//} else {
