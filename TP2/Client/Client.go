@@ -191,24 +191,36 @@ func main() {
 						}
 					}
 				case "join":
-					fmt.Print("Entrez le UUID de la partie > ")
-					gameId, _ := messageReader.ReadString('\n')
-					gameId = strings.ReplaceAll(gameId, "\n", "")
-					soloGame = false
-					request := GameJoinRequest{
-						client:   os.Args[3],
-						gameUUID: gameId,
+					responseOk := false
+					for !responseOk {
+						fmt.Println("Que voulez-vous faire ?\n1 - Rejoindre quelqu'un\n2 - Charger une ancienne partie")
+						joinChoice := utils.ReadConsole(messageReader)
+						switch joinChoice {
+						case "1":
+							responseOk = true
+							fmt.Print("Entrez le UUID de la partie > ")
+							gameId, _ := messageReader.ReadString('\n')
+							gameId = strings.ReplaceAll(gameId, "\n", "")
+							soloGame = false
+							request := GameJoinRequest{
+								client:   os.Args[3],
+								gameUUID: gameId,
+							}
+							sendTLV(conn, 35, request.Encode(clientKey))
+						case "2":
+							responseOk = true
+							// Afficher les parties
+						default:
+							fmt.Println("Le choix: " + joinChoice + " n'est pas reconnu")
+						}
 					}
-					sendTLV(conn, 35, request.Encode(clientKey))
+
 				default:
 					fmt.Println("Commande inconnu")
 					message = utils.ReadConsole(messageReader)
 				}
 			}
 		}
-		//} else {
-		//	sendTLV(conn, t, []byte(message+"|"+messageSigned))
-		//}
 	}
 }
 
@@ -250,7 +262,7 @@ func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, 
 	switch tag {
 	case 100: // Auth
 		*serverKey = string(data)
-		fmt.Println("Écrivez le chiffre de l'action voulu: \n1 - Play\n2 - Join\n3 - Exit")
+		fmt.Println("Écrivez l'action voulu: \nplay\njoin\nexit")
 
 	case 101: // Action
 		splitedMessage := strings.Split(string(data), "|")
