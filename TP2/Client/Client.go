@@ -87,6 +87,7 @@ func main() {
 	var t byte = 1                 ///< Tag
 	var message string = ""        ///< Message à envoyer
 	var soloGame bool = true
+	var responseOk bool = false
 
 	if len(os.Args) < 4 {
 		fmt.Println("Please provide protocol host:port to connect to and username")
@@ -162,7 +163,7 @@ func main() {
 			for !commandOk {
 				switch message {
 				case "play":
-					responseOk := false
+					commandOk = true
 					for !responseOk {
 						fmt.Print("Écrivez le numéro correspondant à votre choix: \n1 - Solo\n2 - Multijoueur\n> ")
 						gameType, _ := messageReader.ReadString('\n')
@@ -191,6 +192,7 @@ func main() {
 						}
 					}
 				case "join":
+					commandOk = true
 					responseOk := false
 					for !responseOk {
 						fmt.Println("Que voulez-vous faire ?\n1 - Rejoindre quelqu'un\n2 - Charger une ancienne partie")
