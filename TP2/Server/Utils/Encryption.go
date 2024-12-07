@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"crypto/aes"
@@ -21,6 +21,7 @@ func GenerateKey() (string, error) {
 func Encrypt(message string, encryptionKey string) (string, error) {
 	key, err := hex.DecodeString(encryptionKey)
 	if err != nil {
+
 		return "", err
 	}
 	text := []byte(message)

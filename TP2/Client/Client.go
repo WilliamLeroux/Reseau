@@ -59,12 +59,14 @@ type GameTurn struct {
 
 func (gt GameTurn) Encode(clientKey string, encryptionKey string) []byte {
 	request := new(bytes.Buffer)
+	signatureData := string(gt.action) + gt.move + gt.gameUUID + gt.client
 	action := buildTLV(10, []byte{gt.action})
 	moveByte := buildTLV(41, []byte(gt.move))
 	gameByte := buildTLV(42, []byte(gt.gameUUID))
 	clientByte := buildTLV(13, []byte(gt.client))
-	signature := buildTLV(3, []byte(signMessage(clientKey, string(gt.action)+gt.move+gt.gameUUID+gt.client)))
+	signature := buildTLV(3, []byte(signMessage(clientKey, signatureData)))
 	accumulatedData := action.String() + moveByte.String() + gameByte.String() + clientByte.String() + signature.String()
+	//accumulatedData = strings.ReplaceAll(accumulatedData, "\n", "")
 	accumulatedData, err := Encrypt(accumulatedData, encryptionKey)
 	if err != nil {
 		fmt.Println(err.Error())
@@ -85,6 +87,7 @@ func main() {
 	var colorTurn byte = UNDEFINED ///< Couleur qui doit jouer dans la partie
 	var t byte = 1                 ///< Tag
 	var message string = ""        ///< Message à envoyer
+	var soloGame bool = true
 
 	if len(os.Args) < 4 {
 		fmt.Println("Please provide protocol host:port to connect to and username")
@@ -122,25 +125,21 @@ func main() {
 
 		tag, value := parseTLV(buffer[:n])
 		handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn)
-
-		if waiting || color != colorTurn {
-			fmt.Println("Stuck dans waiting")
-			n, err = conn.Read(buffer)
-			if err != nil {
-				fmt.Println(err)
-				return
+		if !soloGame {
+			if waiting || color != colorTurn { // Multijoueur seulement
+				n, err = conn.Read(buffer)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				tag, value := parseTLV(buffer[:n])
+				handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn)
 			}
-			tag, value := parseTLV(buffer[:n])
-			handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn)
 
-			/*if color == colorTurn {
+			if color == colorTurn {
 				message = utils.ReadConsole(messageReader)
-			}*/
-		} /*else {
-			message = utils.ReadConsole(messageReader)
-		}*/
-
-		if color == colorTurn {
+			}
+		} else {
 			message = utils.ReadConsole(messageReader)
 		}
 
@@ -148,57 +147,60 @@ func main() {
 
 		t = tagManager(message)
 
-		messageSigned := signMessage(string(clientKey), message)
+		//messageSigned := signMessage(string(clientKey), message)
 
-		if os.Args[1] == "udp" {
-			if inGame && message != "" {
-				t = 40
-				gt := GameTurn{
-					action:   MOVE,
-					move:     message,
-					gameUUID: gameUUID,
-					client:   os.Args[3],
-				}
-				sendTLV(conn, t, gt.Encode(clientKey, encryptionKey))
-			} else if message != "" {
-				switch message {
-				case "play":
-					fmt.Print("Écrivez le numéro correspondant à votre choix: \n1 - Solo\n2 - Multijoueur\n> ")
-					gameType, _ := messageReader.ReadString('\n')
-					gameType = strings.ReplaceAll(gameType, "\n", "")
-					switch gameType {
-					case "1":
-						gr := GameRequest{
-							action:   PLAY,
-							gameType: SOLO,
-							client:   os.Args[3],
-						}
-						sendTLV(conn, 30, gr.Encode(clientKey))
-					case "2":
-						gr := GameRequest{
-							action:   PLAY,
-							gameType: PLAYER_VS_PLAYER,
-							client:   os.Args[3],
-						}
-						sendTLV(conn, 30, gr.Encode(clientKey))
-					}
-				case "join":
-					fmt.Print("Entrez le UUID de la partie > ")
-					gameId, _ := messageReader.ReadString('\n')
-					gameId = strings.ReplaceAll(gameId, "\n", "")
-					request := GameJoinRequest{
-						client:   os.Args[3],
-						gameUUID: gameId,
-					}
-					sendTLV(conn, 35, request.Encode(clientKey))
-				default:
-					fmt.Println("Commande inconnu")
-				}
+		//if os.Args[1] == "udp" {
+		if inGame && message != "" {
+			t = 40
+
+			gt := GameTurn{
+				action:   MOVE,
+				move:     message,
+				gameUUID: gameUUID,
+				client:   os.Args[3],
 			}
-		} else {
-			sendTLV(conn, t, []byte(message+"|"+messageSigned))
+			sendTLV(conn, 40, gt.Encode(clientKey, encryptionKey))
+		} else if message != "" {
+			switch message {
+			case "play":
+				fmt.Print("Écrivez le numéro correspondant à votre choix: \n1 - Solo\n2 - Multijoueur\n> ")
+				gameType, _ := messageReader.ReadString('\n')
+				gameType = strings.ReplaceAll(gameType, "\n", "")
+				switch gameType {
+				case "1":
+					soloGame = true
+					gr := GameRequest{
+						action:   PLAY,
+						gameType: SOLO,
+						client:   os.Args[3],
+					}
+					sendTLV(conn, 30, gr.Encode(clientKey))
+				case "2":
+					soloGame = false
+					gr := GameRequest{
+						action:   PLAY,
+						gameType: PLAYER_VS_PLAYER,
+						client:   os.Args[3],
+					}
+					sendTLV(conn, 30, gr.Encode(clientKey))
+				}
+			case "join":
+				fmt.Print("Entrez le UUID de la partie > ")
+				gameId, _ := messageReader.ReadString('\n')
+				gameId = strings.ReplaceAll(gameId, "\n", "")
+				soloGame = false
+				request := GameJoinRequest{
+					client:   os.Args[3],
+					gameUUID: gameId,
+				}
+				sendTLV(conn, 35, request.Encode(clientKey))
+			default:
+				fmt.Println("Commande inconnu")
+			}
 		}
-
+		//} else {
+		//	sendTLV(conn, t, []byte(message+"|"+messageSigned))
+		//}
 	}
 }
 
@@ -237,8 +239,6 @@ func parseTLV(data []byte) (byte, []byte) {
 }
 
 func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, gameUUID *string, inGame *bool, waiting *bool, color *byte, colorTurn *byte) {
-	fmt.Print("Tag: ")
-	fmt.Println(tag)
 	switch tag {
 	case 100: // Auth
 		*serverKey = string(data)
@@ -370,10 +370,6 @@ func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, 
 					fmt.Print("Entrez votre coup: ")
 				}
 			}
-			fmt.Print("Ta couleur: ")
-			fmt.Println(*color)
-			fmt.Print("La couleur qui joue: ")
-			fmt.Println(*colorTurn)
 		} else {
 			fmt.Println("Bad packet")
 		}

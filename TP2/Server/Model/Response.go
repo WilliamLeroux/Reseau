@@ -1,6 +1,7 @@
 package Model
 
 import (
+	utils "TP2/Utils"
 	"bytes"
 	"encoding/binary"
 	"fmt"
@@ -9,127 +10,109 @@ import (
 )
 
 type GameResponse struct {
-	gameUUID      string
-	gameFEN       string
-	playerList    string
-	encryptionKey string
-	yourTurn      bool
+	GameUUID      string
+	GameFEN       string
+	PlayerList    string
+	EncryptionKey string
 }
 
-func (gr GameResponse) encode(serverKey string) []byte {
-	fen, err := chess.FEN(gr.gameFEN)
+func (gr GameResponse) Encode(serverKey string) []byte {
+	fen, err := chess.FEN(gr.GameFEN)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 	accumulatedData := ""
-	gameUUIDByte := BuildSubTLV(131, []byte(gr.gameUUID))
-	keyByte := BuildSubTLV(4, []byte(gr.encryptionKey))
+	gameUUIDByte := utils.BuildSubTLV(131, []byte(gr.GameUUID))
+	keyByte := utils.BuildSubTLV(4, []byte(gr.EncryptionKey))
 
-	if gr.gameFEN == "" {
-		fmt.Println("fen vide")
-		playerListByte := BuildSubTLV(133, []byte(gr.playerList))
-		accumulatedData += gr.gameUUID + gr.playerList + gr.encryptionKey
+	if gr.GameFEN == "" {
+		playerListByte := utils.BuildSubTLV(133, []byte(gr.PlayerList))
+		accumulatedData += gr.GameUUID + gr.PlayerList + gr.EncryptionKey
 		binary.Write(&gameUUIDByte, binary.BigEndian, playerListByte.Bytes())
 	} else {
-		gameFENByte := BuildSubTLV(132, []byte(chess.NewGame(fen).Position().Board().Draw()))
-		accumulatedData += gr.gameUUID + chess.NewGame(fen).Position().Board().Draw() + gr.encryptionKey
+		gameFENByte := utils.BuildSubTLV(132, []byte(chess.NewGame(fen).Position().Board().Draw()))
+		accumulatedData += gr.GameUUID + chess.NewGame(fen).Position().Board().Draw() + gr.EncryptionKey
 		binary.Write(&gameUUIDByte, binary.BigEndian, gameFENByte.Bytes())
-		/*
-			if &gr.yourTurn != nil {
-				if gr.yourTurn {
-					turnByte := BuildSubTLV(134, []byte{0})
-					accumulatedData += string(0)
-					binary.Write(&gameUUIDByte, binary.BigEndian, turnByte.Bytes())
-				} else {
-					turnByte := BuildSubTLV(134, []byte{1})
-					accumulatedData += string(1)
-					binary.Write(&gameUUIDByte, binary.BigEndian, turnByte.Bytes())
-				}
-			}*/
 	}
-	signatureByte := BuildSubTLV(3, []byte(signMessage(serverKey, accumulatedData)))
+	signatureByte := utils.BuildSubTLV(3, []byte(utils.SignMessage(serverKey, accumulatedData)))
 	binary.Write(&gameUUIDByte, binary.BigEndian, keyByte.Bytes())
 	binary.Write(&gameUUIDByte, binary.BigEndian, signatureByte.Bytes())
 	return gameUUIDByte.Bytes()
 }
 
 type GameActionResponse struct {
-	action       byte
-	gameUUID     string
-	gameFEN      string
-	moveResponse string
-	serverMove   string
-	bestMove     string
-	outcome      string
-	err          string
+	Action       byte
+	GameUUID     string
+	GameFEN      string
+	MoveResponse string
+	ServerMove   string
+	BestMove     string
+	Outcome      string
+	Turn         byte
+	Err          string
 }
 
-func (gar GameActionResponse) encode(serverKey string, encryptionKey string) []byte {
+func (gar GameActionResponse) Encode(serverKey string, encryptionKey string) []byte {
 	response := new(bytes.Buffer)
-	fen, err := chess.FEN(gar.gameFEN)
+	fen, err := chess.FEN(gar.GameFEN)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 	board := chess.NewGame(fen).Position().Board().Draw()
+	if gar.Action == OPPONENT_MOVE_RESPONSE {
+		board = chess.NewGame(fen).Position().Board().Flip(chess.UpDown).Draw()
+	}
 
-	action := BuildSubTLV(141, []byte{gar.action})
-	gameUUIDByte := BuildSubTLV(131, []byte(gar.gameUUID))
-	gameBoardByte := BuildSubTLV(132, []byte(board))
-	signatureData := string(gar.action) + gar.gameUUID + board
+	action := utils.BuildSubTLV(141, []byte{gar.Action})
+	gameUUIDByte := utils.BuildSubTLV(131, []byte(gar.GameUUID))
+	gameBoardByte := utils.BuildSubTLV(132, []byte(board))
+	signatureData := string(gar.Action) + gar.GameUUID + board
 	accumulatedData := action.String() + gameUUIDByte.String() + gameBoardByte.String()
 
-	switch gar.action {
-	case MOVE_RESPONSE:
-		moveResponseByte := BuildSubTLV(142, []byte(gar.moveResponse)) // à modifié
+	switch gar.Action {
+	case MOVE_RESPONSE, OPPONENT_MOVE_RESPONSE:
+		moveResponseByte := utils.BuildSubTLV(142, []byte(gar.MoveResponse)) // à modifié
 		accumulatedData += moveResponseByte.String()
-		signatureData += gar.moveResponse
-		if gar.serverMove != "" {
-			serverMoveByte := BuildSubTLV(143, []byte(gar.serverMove))
+		signatureData += gar.MoveResponse
+		if gar.ServerMove != "" {
+			serverMoveByte := utils.BuildSubTLV(143, []byte(gar.ServerMove))
 			accumulatedData += serverMoveByte.String()
-			signatureData += gar.serverMove
+			signatureData += gar.ServerMove
+		} else {
+			if gar.Turn != UNDEFINED {
+				turnByte := utils.BuildSubTLV(134, []byte{gar.Turn})
+				accumulatedData += turnByte.String()
+				signatureData += string(gar.Turn)
+			}
 		}
 
 	case GAME_OUTCOME:
-		moveResponseByte := BuildSubTLV(142, []byte(gar.moveResponse))
-		if gar.serverMove != "" {
-			serverMoveByte := BuildSubTLV(142, []byte(gar.serverMove))
+		moveResponseByte := utils.BuildSubTLV(142, []byte(gar.MoveResponse))
+		if gar.ServerMove != "" {
+			serverMoveByte := utils.BuildSubTLV(142, []byte(gar.ServerMove))
 			accumulatedData += serverMoveByte.String()
-			signatureData += gar.serverMove
+			signatureData += gar.ServerMove
 		}
-		outcomeByte := BuildSubTLV(144, []byte(gar.outcome))
+		outcomeByte := utils.BuildSubTLV(144, []byte(gar.Outcome))
 		accumulatedData += outcomeByte.String() + moveResponseByte.String()
-		signatureData += gar.outcome + gar.moveResponse
+		signatureData += gar.Outcome + gar.MoveResponse
 	case ERROR:
-		errorByte := BuildSubTLV(199, []byte(gar.err))
-		if gar.bestMove != "" {
-			bestMoveByte := BuildSubTLV(145, []byte(gar.bestMove))
+		errorByte := utils.BuildSubTLV(199, []byte(gar.Err))
+		if gar.BestMove != "" {
+			bestMoveByte := utils.BuildSubTLV(145, []byte(gar.BestMove))
 			accumulatedData += bestMoveByte.String()
-			signatureData += gar.bestMove
+			signatureData += gar.BestMove
 		}
 		accumulatedData += errorByte.String()
-		signatureData += gar.err
+		signatureData += gar.Err
 	}
-	signature := signMessage(serverKey, signatureData)
-	signatureByte := BuildSubTLV(3, []byte(signature))
+	signature := utils.SignMessage(serverKey, signatureData)
+	signatureByte := utils.BuildSubTLV(3, []byte(signature))
 	accumulatedData += signatureByte.String()
-	//binary.Write(&value, binary.BigEndian, signatureByte.Bytes())
-	accumulatedData, err = Encrypt(accumulatedData, encryptionKey)
+	accumulatedData, err = utils.Encrypt(accumulatedData, encryptionKey)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 	binary.Write(response, binary.BigEndian, []byte(accumulatedData))
 	return response.Bytes()
-}
-
-type GameInviteResponse struct {
-	gameUUID string
-}
-
-func (gir GameInviteResponse) Encode(serverKey string) []byte {
-	signature := BuildSubTLV(3, []byte(signMessage(serverKey, gir.gameUUID)))
-	request := new(bytes.Buffer)
-	gameUUIDByte := BuildSubTLV(131, []byte(gir.gameUUID))
-	binary.Write(request, binary.BigEndian, gameUUIDByte.Bytes())
-	binary.Write(request, binary.BigEndian, signature.Bytes())
-	return request.Bytes()
 }
