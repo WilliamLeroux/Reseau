@@ -58,8 +58,9 @@ func handleConnection(conn net.Conn, onGoingGame *map[string]string, udpConnecte
 	var gameUUID string
 	var client string
 	var fen string
+	var isConnected bool = true
 
-	for {
+	for isConnected {
 		buffer := make([]byte, 1024)
 		_, err := conn.Read(buffer)
 		if err != nil {
@@ -67,11 +68,11 @@ func handleConnection(conn net.Conn, onGoingGame *map[string]string, udpConnecte
 			return
 		}
 
-		handleTLVTCP(conn, buffer, &client, &serverKey, &clientKey, &gameUUID, &encryptionKey, udpConnectedClients, tcpConnectedClients, onGoingGame, &fen)
+		handleTLVTCP(conn, buffer, &client, &serverKey, &clientKey, &gameUUID, &encryptionKey, udpConnectedClients, tcpConnectedClients, onGoingGame, &fen, &isConnected)
 	}
 }
 
-func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string, clientKey *string, gameUUID *string, encryptionKey *string, udpConnectedUsers *map[string]*net.UDPAddr, tcpConnectedCLients *map[string]*net.Conn, onGoingGame *map[string]string, fen *string) {
+func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string, clientKey *string, gameUUID *string, encryptionKey *string, udpConnectedUsers *map[string]*net.UDPAddr, tcpConnectedCLients *map[string]*net.Conn, onGoingGame *map[string]string, fen *string, isConnected *bool) {
 	if len(data) < 3 {
 		fmt.Println("Message trop court, ignoré.")
 		return
@@ -186,6 +187,7 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 	case 35: // Rejoindre une partie
 		signature := ""
 		accumulatedData := ""
+		var action byte = 0
 
 		utils.ParseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
 			switch subTag {
@@ -198,6 +200,8 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 			case 14: // UUID partie
 				*gameUUID = string(subValue)
 				accumulatedData += *gameUUID
+			case 53: // Charger
+				action = subValue[0]
 			default:
 
 			}
@@ -205,37 +209,50 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 
 		if utils.SignMessage(*clientKey, accumulatedData) == signature {
 			*encryptionKey = connectToGame(*gameUUID, *client)
-			response := Model.GameResponse{
-				GameUUID:      *gameUUID,
-				GameFEN:       getGame(*gameUUID),
-				EncryptionKey: *encryptionKey,
-			}
-
-			(*onGoingGame)[*client] = response.GameUUID
-			_, err := conn.Write(utils.BuildTLV(130, response.Encode(*serverKey)))
-			if err != nil {
-				fmt.Println(err.Error())
-			}
-
-			opponent := Database.GetUserName(Database.GetPlayerPId(response.GameUUID))
-			opServerKey, _ := getKeys(opponent)
-			gr := Model.GameResponse{
-				GameUUID:      response.GameUUID,
-				GameFEN:       getGame(*gameUUID),
-				EncryptionKey: Database.GetPlayerPKey(response.GameUUID),
-			}
-			opponentUDPAddr := (*udpConnectedUsers)[opponent]
-			var opponentTCPAddr net.Conn
-			if opponentUDPAddr == nil {
-				opponentTCPAddr = *(*tcpConnectedCLients)[opponent]
-				_, err = opponentTCPAddr.Write(utils.BuildTLV(130, gr.Encode(opServerKey)))
+			if action == Model.LOAD_GAME {
+				gr := Model.GameResponse{
+					GameUUID:      *gameUUID,
+					GameFEN:       getGame(*gameUUID),
+					EncryptionKey: *encryptionKey,
+				}
+				_, err := conn.Write(utils.BuildTLV(130, gr.Encode(*serverKey)))
+				if err != nil {
+					fmt.Println(err.Error())
+				}
 			} else {
-				_, err = conn.Write(utils.BuildTLV(130, gr.Encode(opServerKey))) // UDP
+				response := Model.GameResponse{
+					GameUUID:      *gameUUID,
+					GameFEN:       getGame(*gameUUID),
+					EncryptionKey: *encryptionKey,
+				}
+
+				(*onGoingGame)[*client] = response.GameUUID
+				_, err := conn.Write(utils.BuildTLV(130, response.Encode(*serverKey)))
+				if err != nil {
+					fmt.Println(err.Error())
+				}
+
+				opponent := Database.GetUserName(Database.GetPlayerPId(response.GameUUID))
+				opServerKey, _ := getKeys(opponent)
+				gr := Model.GameResponse{
+					GameUUID:      response.GameUUID,
+					GameFEN:       getGame(*gameUUID),
+					EncryptionKey: Database.GetPlayerPKey(response.GameUUID),
+				}
+				opponentUDPAddr := (*udpConnectedUsers)[opponent]
+				var opponentTCPAddr net.Conn
+				if opponentUDPAddr == nil {
+					opponentTCPAddr = *(*tcpConnectedCLients)[opponent]
+					_, err = opponentTCPAddr.Write(utils.BuildTLV(130, gr.Encode(opServerKey)))
+				} else {
+					_, err = conn.Write(utils.BuildTLV(130, gr.Encode(opServerKey))) // UDP
+				}
+
+				if err != nil {
+					fmt.Println(err.Error())
+				}
 			}
 
-			if err != nil {
-				fmt.Println(err.Error())
-			}
 		} else {
 			fmt.Println("Mauvaise signature join")
 		}
@@ -319,7 +336,7 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 				response = prepareResponse(err, isFinished, *gameUUID, bestMove, moveError, newFen, outcome, serverMove, Model.MOVE_RESPONSE, turn)
 				_, connErr := conn.Write(utils.BuildTLV(140, response.Encode(*serverKey, *encryptionKey)))
 				if connErr != nil {
-					fmt.Println(err.Error())
+					fmt.Println(connErr.Error())
 				}
 
 			default:
@@ -329,12 +346,53 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 			fmt.Println("Mauvaise signature action")
 		}
 
-	case 98: // Quitter
-		splittedMessage := strings.Split(string(value), "|")
-		if utils.SignMessage(*clientKey, splittedMessage[0]) == splittedMessage[1] {
-			clientChangeStatus(splittedMessage[2], Model.OFFLINE)
-			delete(*udpConnectedUsers, splittedMessage[2])
+	case 50: // Charger une partie
+		signature := ""
+		accumulatedData := ""
+
+		utils.ParseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
+			switch subTag {
+			case 3: // Signature
+				signature += string(subValue)
+			case 13: // Client
+				accumulatedData += string(subValue)
+			}
+		})
+
+		if utils.SignMessage(*clientKey, accumulatedData) == signature {
+			gameList := Database.GetPlayerGames(uint(Database.GetUserId(*client)))
+			err := ""
+			if gameList == "" {
+				err = "Le joueur n'a pas de partie"
+			}
+			response := Model.GameListResponse{
+				List:  gameList,
+				Error: err,
+			}
+			_, connErr := conn.Write(utils.BuildTLV(150, response.Encode(*serverKey)))
+			if connErr != nil {
+				fmt.Println(connErr.Error())
+			}
 		}
+
+	case 98: // Quitter
+		signature := ""
+		accumulatedData := ""
+
+		utils.ParseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
+			switch subTag {
+			case 3:
+				signature += string(subValue)
+			case 13:
+				accumulatedData += string(subValue)
+			}
+			if utils.SignMessage(*clientKey, accumulatedData) == signature {
+				clientChangeStatus(*client, Model.OFFLINE)
+				delete(*tcpConnectedCLients, *client)
+				RemoveUserFromGame(*client, onGoingGame)
+				*isConnected = false
+			}
+		})
 	default:
 		fmt.Println("Tag inconnu")
 	}
@@ -390,7 +448,6 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 		serverKey = auth(string(value))
 		secretResponse := utils.BuildTLV(100, []byte(serverKey))
 		(*udpConnectedUsers)[strings.Split(string(value), "|")[0]] = addr
-
 		_, err := conn.WriteToUDP(secretResponse, addr)
 		if err != nil {
 			fmt.Println(err.Error())
@@ -492,6 +549,7 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 		accumulatedData := ""
 		client := ""
 		gameUUID := ""
+		var action byte = 0
 
 		utils.ParseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
 			switch subTag {
@@ -504,6 +562,8 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 			case 14: // UUID partie
 				gameUUID = string(subValue)
 				accumulatedData += gameUUID
+			case 53: // Charger
+				action = subValue[0]
 			default:
 
 			}
@@ -512,36 +572,49 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 		serverKey, clientKey = getKeys(client)
 		if utils.SignMessage(clientKey, accumulatedData) == signature {
 			encryptionKey := connectToGame(gameUUID, client)
-			response := Model.GameResponse{
-				GameUUID:      gameUUID,
-				GameFEN:       getGame(gameUUID),
-				EncryptionKey: encryptionKey,
-			}
 
-			(*onGoingGame)[client] = response.GameUUID
-			_, err := conn.WriteToUDP(utils.BuildTLV(130, response.Encode(serverKey)), addr)
-			if err != nil {
-				fmt.Println(err.Error())
-			}
-
-			opponent := Database.GetUserName(Database.GetPlayerPId(response.GameUUID))
-			opServerKey, _ := getKeys(opponent)
-			gr := Model.GameResponse{
-				GameUUID:      response.GameUUID,
-				GameFEN:       getGame(gameUUID),
-				EncryptionKey: Database.GetPlayerPKey(response.GameUUID),
-			}
-			opponentUDPAddr := (*udpConnectedUsers)[opponent]
-			var opponentTCPAddr net.Conn
-			if opponentUDPAddr == nil {
-				opponentTCPAddr = *(*tcpConnectedCLients)[opponent]
-				_, err = opponentTCPAddr.Write(utils.BuildTLV(130, gr.Encode(opServerKey)))
+			if action == Model.LOAD_GAME {
+				gr := Model.GameResponse{
+					GameUUID:      gameUUID,
+					GameFEN:       getGame(gameUUID),
+					EncryptionKey: encryptionKey,
+				}
+				fmt.Println(gr.GameFEN)
+				_, err := conn.WriteToUDP(utils.BuildTLV(130, gr.Encode(serverKey)), addr)
+				if err != nil {
+					fmt.Println(err.Error())
+				}
 			} else {
-				_, err = conn.WriteTo(utils.BuildTLV(130, gr.Encode(opServerKey)), opponentUDPAddr)
-			}
+				response := Model.GameResponse{
+					GameUUID:      gameUUID,
+					GameFEN:       getGame(gameUUID),
+					EncryptionKey: encryptionKey,
+				}
+				(*onGoingGame)[client] = response.GameUUID
+				_, err := conn.WriteToUDP(utils.BuildTLV(130, response.Encode(serverKey)), addr)
+				if err != nil {
+					fmt.Println(err.Error())
+				}
 
-			if err != nil {
-				fmt.Println(err.Error())
+				opponent := Database.GetUserName(Database.GetPlayerPId(response.GameUUID))
+				opServerKey, _ := getKeys(opponent)
+				gr := Model.GameResponse{
+					GameUUID:      response.GameUUID,
+					GameFEN:       getGame(gameUUID),
+					EncryptionKey: Database.GetPlayerPKey(response.GameUUID),
+				}
+				opponentUDPAddr := (*udpConnectedUsers)[opponent]
+				var opponentTCPAddr net.Conn
+				if opponentUDPAddr == nil {
+					opponentTCPAddr = *(*tcpConnectedCLients)[opponent]
+					_, err = opponentTCPAddr.Write(utils.BuildTLV(130, gr.Encode(opServerKey)))
+				} else {
+					_, err = conn.WriteTo(utils.BuildTLV(130, gr.Encode(opServerKey)), opponentUDPAddr)
+				}
+
+				if err != nil {
+					fmt.Println(err.Error())
+				}
 			}
 		} else {
 			fmt.Println("Mauvaise signature join")
@@ -627,18 +700,64 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 		} else {
 			fmt.Println("Mauvaise signature")
 		}
+	case 50: // Charger une partie
+		signature := ""
+		accumulatedData := ""
+		client := ""
+
+		utils.ParseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
+			switch subTag {
+			case 3: // Signature
+				signature += string(subValue)
+			case 13: // Client
+				client = string(subValue)
+				accumulatedData += string(subValue)
+			}
+		})
+		serverKey, clientKey = getKeys(client)
+		if utils.SignMessage(clientKey, accumulatedData) == signature {
+			gameList := Database.GetPlayerGames(uint(Database.GetUserId(client)))
+			err := ""
+			if gameList == "" {
+				err = "Le joueur n'a pas de partie"
+			}
+			response := Model.GameListResponse{
+				List:  gameList,
+				Error: err,
+			}
+			_, connErr := conn.WriteToUDP(utils.BuildTLV(150, response.Encode(serverKey)), addr)
+			if connErr != nil {
+				fmt.Println(connErr.Error())
+			}
+		}
 
 	case 98: // Quitter
-		splittedMessage := strings.Split(string(value), "|")
-		_, clientKey = getKeys(splittedMessage[2])
-		if utils.SignMessage(clientKey, splittedMessage[0]) == splittedMessage[1] {
-			fmt.Println("> " + string(value))
-			clientChangeStatus(splittedMessage[2], Model.OFFLINE)
-			delete(*udpConnectedUsers, splittedMessage[2])
-		}
+		signature := ""
+		accumulatedData := ""
+		client := ""
+
+		utils.ParseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
+			switch subTag {
+			case 3:
+				signature += string(subValue)
+			case 13:
+				client = string(subValue)
+				accumulatedData += string(subValue)
+			}
+			_, clientKey = getKeys(client)
+			if utils.SignMessage(clientKey, accumulatedData) == signature {
+				clientChangeStatus(client, Model.OFFLINE)
+				delete(*udpConnectedUsers, client)
+				RemoveUserFromGame(client, onGoingGame)
+			}
+		})
 	default:
 		fmt.Println("Tag inconnu")
 	}
+}
+
+func RemoveUserFromGame(client string, onGoingGame *map[string]string) {
+	delete(*onGoingGame, client)
 }
 
 func auth(client string) string {
@@ -692,9 +811,19 @@ func createSoloGame(gameType byte, client string, encryptionKey string) string {
 }
 
 func connectToGame(gameUUID string, client string) string {
-	key, _ := utils.GenerateKey()
-	Database.UpdateSecondaryPlayer(gameUUID, Database.GetUserId(client), key)
-	return key
+	id := Database.GetUserId(client)
+	if id == Database.GetPlayerPId(gameUUID) {
+		Database.UpdateGameStatus(Model.ONGOING, gameUUID)
+		return Database.GetPlayerPKey(gameUUID)
+	} else if id == Database.GetPlayerSId(gameUUID) {
+		Database.UpdateGameStatus(Model.ONGOING, gameUUID)
+		return Database.GetPlayerSKey(gameUUID)
+	} else {
+		key, _ := utils.GenerateKey()
+		Database.UpdateSecondaryPlayer(gameUUID, Database.GetUserId(client), key)
+		Database.UpdateGameStatus(Model.ONGOING, gameUUID)
+		return key
+	}
 }
 
 func getGame(gameUUID string) string {

@@ -35,6 +35,7 @@ func (gr GameRequest) Encode(clientKey string) []byte {
 type GameJoinRequest struct {
 	client   string ///< Client
 	gameUUID string ///< Id de la partie
+	action   byte
 }
 
 func (gjr GameJoinRequest) Encode(clientKey string) []byte {
@@ -42,6 +43,11 @@ func (gjr GameJoinRequest) Encode(clientKey string) []byte {
 	request := new(bytes.Buffer)
 	clientByte := buildTLV(13, []byte(gjr.client))
 	gameByte := buildTLV(14, []byte(gjr.gameUUID))
+	if gjr.action != 0 {
+		actionByte := buildTLV(53, []byte{gjr.action})
+		binary.Write(request, binary.BigEndian, actionByte.Bytes())
+	}
+
 	signature := buildTLV(3, []byte(signMessage(clientKey, accumulatedData)))
 
 	binary.Write(request, binary.BigEndian, clientByte.Bytes())
@@ -75,6 +81,34 @@ func (gt GameTurn) Encode(clientKey string, encryptionKey string) []byte {
 	return request.Bytes()
 }
 
+type LoadGame struct {
+	client string
+}
+
+func (lg LoadGame) Encode(clientKey string) []byte {
+	request := new(bytes.Buffer)
+	signatureData := lg.client
+	clientByte := buildTLV(13, []byte(lg.client))
+	signature := buildTLV(3, []byte(signMessage(clientKey, signatureData)))
+	accumulatedData := clientByte.String() + signature.String()
+	binary.Write(request, binary.BigEndian, []byte(accumulatedData))
+	return request.Bytes()
+}
+
+type Quit struct {
+	Client string
+}
+
+func (q Quit) Encode(clientKey string) []byte {
+	request := new(bytes.Buffer)
+	signatureData := q.Client
+	clientByte := buildTLV(13, []byte(q.Client))
+	signature := buildTLV(3, []byte(signMessage(clientKey, signatureData)))
+	accumulatedData := clientByte.String() + signature.String()
+	binary.Write(request, binary.BigEndian, []byte(accumulatedData))
+	return request.Bytes()
+}
+
 func main() {
 	var serverKey string           ///< Clé de signature du serveur
 	var clientKey string           ///< Clé de signature du client
@@ -84,10 +118,11 @@ func main() {
 	var waiting bool = false       ///< Booléen signifiant si le client est en attente
 	var color byte = UNDEFINED     ///< Couleur du client dans la partie
 	var colorTurn byte = UNDEFINED ///< Couleur qui doit jouer dans la partie
-	var t byte = 1                 ///< Tag
 	var message string = ""        ///< Message à envoyer
 	var soloGame bool = true
 	var responseOk bool = false
+	var loadOldGame bool = false
+	var isUp bool = true
 
 	if len(os.Args) < 4 {
 		fmt.Println("Please provide protocol host:port to connect to and username")
@@ -115,7 +150,7 @@ func main() {
 
 	buffer := make([]byte, 1024)
 
-	for t != 98 {
+	for isUp {
 		message = ""
 		n, err := conn.Read(buffer)
 		if err != nil {
@@ -124,8 +159,8 @@ func main() {
 		}
 
 		tag, value := parseTLV(buffer[:n])
-		handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn)
-		if !soloGame {
+		handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn, &loadOldGame)
+		if !soloGame && isUp {
 			if waiting || color != colorTurn { // Multijoueur seulement
 				n, err = conn.Read(buffer)
 				if err != nil {
@@ -133,23 +168,29 @@ func main() {
 					return
 				}
 				tag, value := parseTLV(buffer[:n])
-				handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn)
+				handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn, &loadOldGame)
 			}
 
 			if color == colorTurn {
 				message = utils.ReadConsole(messageReader)
 			}
 		} else {
+
 			message = utils.ReadConsole(messageReader)
+
 		}
 
 		message = strings.ReplaceAll(message, "\n", "")
 
-		t = tagManager(message)
-
-		if inGame && message != "" {
-			t = 40
-
+		if loadOldGame && isUp {
+			request := GameJoinRequest{
+				client:   os.Args[3],
+				gameUUID: message,
+				action:   LOAD_GAME,
+			}
+			loadOldGame = false
+			sendTLV(conn, 35, request.Encode(clientKey))
+		} else if inGame && message != "" && isUp {
 			gt := GameTurn{
 				action:   MOVE,
 				move:     message,
@@ -207,16 +248,25 @@ func main() {
 							request := GameJoinRequest{
 								client:   os.Args[3],
 								gameUUID: gameId,
+								action:   0,
 							}
 							sendTLV(conn, 35, request.Encode(clientKey))
 						case "2":
 							responseOk = true
-							// Afficher les parties
+							lg := LoadGame{
+								client: os.Args[3],
+							}
+							sendTLV(conn, 50, lg.Encode(clientKey))
 						default:
 							fmt.Println("Le choix: " + joinChoice + " n'est pas reconnu")
 						}
 					}
-
+				case "exit":
+					commandOk = true
+					request := Quit{
+						Client: os.Args[3],
+					}
+					sendTLV(conn, 98, request.Encode(clientKey))
 				default:
 					fmt.Println("Commande inconnu")
 					message = utils.ReadConsole(messageReader)
@@ -260,7 +310,7 @@ func parseTLV(data []byte) (byte, []byte) {
 	return tag, data[3 : 3+length]
 }
 
-func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, gameUUID *string, inGame *bool, waiting *bool, color *byte, colorTurn *byte) {
+func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, gameUUID *string, inGame *bool, waiting *bool, color *byte, colorTurn *byte, loadOldGame *bool) {
 	switch tag {
 	case 100: // Auth
 		*serverKey = string(data)
@@ -394,6 +444,37 @@ func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, 
 			}
 		} else {
 			fmt.Println("Bad packet")
+		}
+	case 150:
+		signature := ""
+		list := ""
+		err := ""
+		accumulatedData := ""
+
+		parseSubTLV(data, func(subTag byte, subValue []byte) {
+			switch subTag {
+			case 3:
+				signature = string(subValue)
+			case 151:
+				list = string(subValue)
+				accumulatedData += string(subValue)
+			case 152:
+				err = string(subValue)
+				accumulatedData += string(subValue)
+			}
+		})
+		if signMessage(*serverKey, accumulatedData) == signature {
+			if err != "" {
+				*loadOldGame = false
+				fmt.Println(err)
+			} else {
+				*loadOldGame = true
+				splittedList := strings.Split(list, ",")
+				fmt.Println("Entrez le uuid de la partie pour la charger")
+				for i := 0; i < len(splittedList); i++ {
+					fmt.Println(splittedList[i])
+				}
+			}
 		}
 
 	case 199: // Mauvais packet

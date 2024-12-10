@@ -116,3 +116,22 @@ func (gar GameActionResponse) Encode(serverKey string, encryptionKey string) []b
 	binary.Write(response, binary.BigEndian, []byte(accumulatedData))
 	return response.Bytes()
 }
+
+type GameListResponse struct {
+	List  string
+	Error string
+}
+
+func (glr GameListResponse) Encode(serveyKey string) []byte {
+	response := new(bytes.Buffer)
+	signatureData := glr.List + glr.Error
+	listByte := utils.BuildSubTLV(151, []byte(glr.List))
+	errorByte := utils.BuildSubTLV(152, []byte(glr.Error))
+	accumulatedData := listByte.String() + errorByte.String()
+
+	signature := utils.SignMessage(serveyKey, signatureData)
+	signatureByte := utils.BuildSubTLV(3, []byte(signature))
+	accumulatedData += signatureByte.String()
+	binary.Write(response, binary.BigEndian, []byte(accumulatedData))
+	return response.Bytes()
+}

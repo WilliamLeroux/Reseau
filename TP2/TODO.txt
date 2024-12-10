@@ -1,0 +1,8 @@
+Jouer contre stockfish (changer le client)
+TCP
+Gestion erreur
+Arrangement des TLV côté serveur
+Arrangement handleTLV client
+Arrangement des fichiers
+Commentaires
+Vidéo

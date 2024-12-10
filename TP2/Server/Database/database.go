@@ -386,6 +386,75 @@ func GetPlayerPId(gameUUID string) int {
 	return id
 }
 
+func GetPlayerGames(id uint) string {
+	games := ""
+	db, err := dbCreation()
+
+	if err != nil {
+		fmt.Println(err.Error())
+		return games
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		fmt.Println(err.Error())
+		return games
+	}
+	query, err := db.Prepare(GET_PLAYER_GAMES)
+	if err != nil {
+		fmt.Println(err.Error())
+		_ = tx.Rollback()
+		return games
+	}
+
+	rows, err := query.Query(id)
+	if err != nil {
+		fmt.Println(err.Error())
+		_ = tx.Rollback()
+		return games
+	}
+
+	cols, err := rows.Columns()
+	if err != nil {
+		fmt.Println("Failed to get columns", err)
+		return games
+	}
+
+	if rows != nil {
+		rawResult := make([][]byte, len(cols))
+		result := make([]string, len(cols))
+
+		dest := make([]interface{}, len(cols)) // A temporary interface{} slice
+		for i := range rawResult {
+			dest[i] = &rawResult[i] // Put pointers to each string in the interface slice
+		}
+
+		for rows.Next() {
+			err = rows.Scan(dest...)
+			if err != nil {
+				fmt.Println("Failed to scan row", err)
+				return games
+			}
+
+			for i, raw := range rawResult {
+
+				if raw == nil {
+					result[i] = "\\N"
+				} else {
+					result[i] = string(raw)
+					if i == 1 {
+						if games == "" {
+							games = result[1]
+						} else {
+							games = games + "," + result[1]
+						}
+					}
+				}
+			}
+		}
+	}
+	return games
+}
+
 func GetPlayerSId(gameUUID string) int {
 	id := -1
 	db, err := dbCreation()

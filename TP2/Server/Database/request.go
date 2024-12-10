@@ -19,4 +19,5 @@ const (
 	UPDATE_SECONDARY_PLAYER = `UPDATE games SET player_S = ?, player_s_key = ? WHERE uuid = ?;`
 	UPDATE_GAME_STATUS      = `UPDATE games SET status = ? WHERE uuid = ?;`
 	UPDATE_FEN              = `UPDATE games SET fen = ? WHERE uuid = ?;`
+	GET_PLAYER_GAMES        = `SELECT id, uuid FROM games WHERE player_P == $playerId OR player_S == $playerId AND status != 2 ORDER BY id DESC LIMIT 5;`
 )
