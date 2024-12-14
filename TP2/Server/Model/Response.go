@@ -14,6 +14,7 @@ type GameResponse struct {
 	GameFEN       string
 	PlayerList    string
 	EncryptionKey string
+	Color         byte
 }
 
 func (gr GameResponse) Encode(serverKey string) []byte {
@@ -34,8 +35,25 @@ func (gr GameResponse) Encode(serverKey string) []byte {
 		accumulatedData += gr.GameUUID + chess.NewGame(fen).Position().Board().Draw() + gr.EncryptionKey
 		binary.Write(&gameUUIDByte, binary.BigEndian, gameFENByte.Bytes())
 	}
-	signatureByte := utils.BuildSubTLV(3, []byte(utils.SignMessage(serverKey, accumulatedData)))
 	binary.Write(&gameUUIDByte, binary.BigEndian, keyByte.Bytes())
+	if gr.Color != 0 {
+		colorByte := utils.BuildSubTLV(134, []byte{gr.Color})
+		accumulatedData += string(gr.Color)
+		binary.Write(&gameUUIDByte, binary.BigEndian, colorByte.Bytes())
+		turnColor := UNDEFINED
+		switch chess.NewGame(fen).Position().Turn().String() {
+		case "b":
+			turnColor = BLACK
+		case "w":
+			turnColor = WHITE
+		default:
+			turnColor = UNDEFINED
+		}
+		turnByte := utils.BuildSubTLV(135, []byte{turnColor})
+		accumulatedData += string(turnColor)
+		binary.Write(&gameUUIDByte, binary.BigEndian, turnByte.Bytes())
+	}
+	signatureByte := utils.BuildSubTLV(3, []byte(utils.SignMessage(serverKey, accumulatedData)))
 	binary.Write(&gameUUIDByte, binary.BigEndian, signatureByte.Bytes())
 	return gameUUIDByte.Bytes()
 }
@@ -60,7 +78,7 @@ func (gar GameActionResponse) Encode(serverKey string, encryptionKey string) []b
 	}
 	board := chess.NewGame(fen).Position().Board().Draw()
 	if gar.Action == OPPONENT_MOVE_RESPONSE {
-		board = chess.NewGame(fen).Position().Board().Flip(chess.UpDown).Draw()
+		board = chess.NewGame(fen).Position().Board().Draw()
 	}
 
 	action := utils.BuildSubTLV(141, []byte{gar.Action})

@@ -29,9 +29,9 @@ func main() {
 
 func TCPServer(wg *sync.WaitGroup, onGoingGame *map[string]string, udpConnectedClients *map[string]*net.UDPAddr, tcpConnectedClients *map[string]*net.Conn) {
 	defer wg.Done()
-	tcpAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:8000")
+	tcpAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:8080")
 	if err != nil {
-		fmt.Println("Erreur lors de l'écoute sur le port 8000: ", err)
+		fmt.Println("Erreur lors de l'écoute sur le port 8080: ", err)
 		return
 	}
 
@@ -57,7 +57,6 @@ func handleConnection(conn net.Conn, onGoingGame *map[string]string, udpConnecte
 	var encryptionKey string
 	var gameUUID string
 	var client string
-	var fen string
 	var isConnected bool = true
 
 	for isConnected {
@@ -68,11 +67,11 @@ func handleConnection(conn net.Conn, onGoingGame *map[string]string, udpConnecte
 			return
 		}
 
-		handleTLVTCP(conn, buffer, &client, &serverKey, &clientKey, &gameUUID, &encryptionKey, udpConnectedClients, tcpConnectedClients, onGoingGame, &fen, &isConnected)
+		handleTLVTCP(conn, buffer, &client, &serverKey, &clientKey, &gameUUID, &encryptionKey, udpConnectedClients, tcpConnectedClients, onGoingGame, &isConnected)
 	}
 }
 
-func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string, clientKey *string, gameUUID *string, encryptionKey *string, udpConnectedUsers *map[string]*net.UDPAddr, tcpConnectedCLients *map[string]*net.Conn, onGoingGame *map[string]string, fen *string, isConnected *bool) {
+func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string, clientKey *string, gameUUID *string, encryptionKey *string, udpConnectedUsers *map[string]*net.UDPAddr, tcpConnectedCLients *map[string]*net.Conn, onGoingGame *map[string]string, isConnected *bool) {
 	if len(data) < 3 {
 		fmt.Println("Message trop court, ignoré.")
 		return
@@ -188,7 +187,6 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 		signature := ""
 		accumulatedData := ""
 		var action byte = 0
-
 		utils.ParseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
 			switch subTag {
 
@@ -210,10 +208,20 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 		if utils.SignMessage(*clientKey, accumulatedData) == signature {
 			*encryptionKey = connectToGame(*gameUUID, *client)
 			if action == Model.LOAD_GAME {
+				color := Model.UNDEFINED
+				opponentName := Database.GetUserName(Database.GetPlayerSId(*gameUUID))
+				if opponentName != "" {
+					if opponentName == *client {
+						color = Model.BLACK
+					} else {
+						color = Model.WHITE
+					}
+				}
 				gr := Model.GameResponse{
 					GameUUID:      *gameUUID,
 					GameFEN:       getGame(*gameUUID),
 					EncryptionKey: *encryptionKey,
+					Color:         color,
 				}
 				_, err := conn.Write(utils.BuildTLV(130, gr.Encode(*serverKey)))
 				if err != nil {
@@ -224,6 +232,7 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 					GameUUID:      *gameUUID,
 					GameFEN:       getGame(*gameUUID),
 					EncryptionKey: *encryptionKey,
+					Color:         Model.UNDEFINED,
 				}
 
 				(*onGoingGame)[*client] = response.GameUUID
@@ -238,6 +247,7 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 					GameUUID:      response.GameUUID,
 					GameFEN:       getGame(*gameUUID),
 					EncryptionKey: Database.GetPlayerPKey(response.GameUUID),
+					Color:         Model.UNDEFINED,
 				}
 				opponentUDPAddr := (*udpConnectedUsers)[opponent]
 				var opponentTCPAddr net.Conn
@@ -317,10 +327,13 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 						var opponentTCPAddr net.Conn
 						if opponentUDPAddr == nil {
 							opponentTCPAddr = *(*tcpConnectedCLients)[opponentName]
-							_, connErr := opponentTCPAddr.Write(utils.BuildTLV(140, opponentResponse.Encode(opponentServerKey, getEncryptionKey(opponentName, *gameUUID))))
-							if connErr != nil {
-								fmt.Println(connErr)
+							if opponentTCPAddr != nil {
+								_, connErr := opponentTCPAddr.Write(utils.BuildTLV(140, opponentResponse.Encode(opponentServerKey, getEncryptionKey(opponentName, *gameUUID))))
+								if connErr != nil {
+									fmt.Println(connErr)
+								}
 							}
+
 						} else {
 							_, connErr := conn.Write(utils.BuildTLV(140, opponentResponse.Encode(opponentServerKey, getEncryptionKey(opponentName, *gameUUID)))) // UDP
 							if connErr != nil {
@@ -401,9 +414,9 @@ func handleTLVTCP(conn net.Conn, data []byte, client *string, serverKey *string,
 func UDPServer(wg *sync.WaitGroup, onGoingGame *map[string]string, udpConnectedClients *map[string]*net.UDPAddr, tcpConnectedClients *map[string]*net.Conn) {
 
 	defer wg.Done()
-	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:8001")
+	udpAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:8081")
 	if err != nil {
-		fmt.Println("Erreur lors de l'écoute sur le port 8001: ", err)
+		fmt.Println("Erreur lors de l'écoute sur le port 8081: ", err)
 		return
 	}
 
@@ -574,12 +587,21 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 			encryptionKey := connectToGame(gameUUID, client)
 
 			if action == Model.LOAD_GAME {
+				color := Model.UNDEFINED
+				opponentName := Database.GetUserName(Database.GetPlayerSId(gameUUID))
+				if opponentName != "" {
+					if opponentName == client {
+						color = Model.BLACK
+					} else {
+						color = Model.WHITE
+					}
+				}
 				gr := Model.GameResponse{
 					GameUUID:      gameUUID,
 					GameFEN:       getGame(gameUUID),
 					EncryptionKey: encryptionKey,
+					Color:         color,
 				}
-				fmt.Println(gr.GameFEN)
 				_, err := conn.WriteToUDP(utils.BuildTLV(130, gr.Encode(serverKey)), addr)
 				if err != nil {
 					fmt.Println(err.Error())
@@ -589,6 +611,7 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 					GameUUID:      gameUUID,
 					GameFEN:       getGame(gameUUID),
 					EncryptionKey: encryptionKey,
+					Color:         Model.UNDEFINED,
 				}
 				(*onGoingGame)[client] = response.GameUUID
 				_, err := conn.WriteToUDP(utils.BuildTLV(130, response.Encode(serverKey)), addr)
@@ -602,6 +625,7 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 					GameUUID:      response.GameUUID,
 					GameFEN:       getGame(gameUUID),
 					EncryptionKey: Database.GetPlayerPKey(response.GameUUID),
+					Color:         Model.UNDEFINED,
 				}
 				opponentUDPAddr := (*udpConnectedUsers)[opponent]
 				var opponentTCPAddr net.Conn
@@ -634,7 +658,6 @@ func handleTLVUDP(conn *net.UDPConn, addr *net.UDPAddr, data []byte, udpConnecte
 		if err != nil {
 			fmt.Println(err.Error())
 		}
-		fmt.Println([]byte(value))
 		utils.ParseSubTLV([]byte(value), func(subTag byte, subValue []byte) {
 			switch subTag {
 			case 3: // Signature

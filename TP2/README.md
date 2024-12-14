@@ -25,13 +25,13 @@ go run . protocol port nom
 
 exemple:
 ```
-go run . udp 8001 client1
+go run . udp 8081 client1
 ```
 
 | protocol  | port  |
 | --------- | --------- |
-| udp | 8001 |
-| tcp | 8000|
+| udp | 8081 |
+| tcp | 8080|
 
 # Menu de jeu
 

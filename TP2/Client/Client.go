@@ -159,7 +159,7 @@ func main() {
 		}
 
 		tag, value := parseTLV(buffer[:n])
-		handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn, &loadOldGame)
+		handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn, &loadOldGame, &soloGame)
 		if !soloGame && isUp {
 			if waiting || color != colorTurn { // Multijoueur seulement
 				n, err = conn.Read(buffer)
@@ -168,7 +168,7 @@ func main() {
 					return
 				}
 				tag, value := parseTLV(buffer[:n])
-				handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn, &loadOldGame)
+				handleTLV(tag, value, &serverKey, &encryptionKey, &gameUUID, &inGame, &waiting, &color, &colorTurn, &loadOldGame, &soloGame)
 			}
 
 			if color == colorTurn {
@@ -182,13 +182,14 @@ func main() {
 
 		message = strings.ReplaceAll(message, "\n", "")
 
-		if loadOldGame && isUp {
+		if loadOldGame {
 			request := GameJoinRequest{
 				client:   os.Args[3],
 				gameUUID: message,
 				action:   LOAD_GAME,
 			}
 			loadOldGame = false
+			soloGame = false
 			sendTLV(conn, 35, request.Encode(clientKey))
 		} else if inGame && message != "" && isUp {
 			gt := GameTurn{
@@ -266,6 +267,7 @@ func main() {
 					request := Quit{
 						Client: os.Args[3],
 					}
+					isUp = false
 					sendTLV(conn, 98, request.Encode(clientKey))
 				default:
 					fmt.Println("Commande inconnu")
@@ -310,7 +312,7 @@ func parseTLV(data []byte) (byte, []byte) {
 	return tag, data[3 : 3+length]
 }
 
-func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, gameUUID *string, inGame *bool, waiting *bool, color *byte, colorTurn *byte, loadOldGame *bool) {
+func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, gameUUID *string, inGame *bool, waiting *bool, color *byte, colorTurn *byte, loadOldGame *bool, soloGame *bool) {
 	switch tag {
 	case 100: // Auth
 		*serverKey = string(data)
@@ -328,6 +330,8 @@ func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, 
 		accumulatedData := ""
 		board := ""
 		playList := ""
+		var responseColor byte
+		var turnResponse byte
 
 		parseSubTLV(data, func(subTag byte, subValue []byte) {
 			switch subTag {
@@ -346,28 +350,41 @@ func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, 
 			case 133: // Player list
 				playList = string(subValue)
 				accumulatedData += playList
+			case 134: // Couleur
+				responseColor = subValue[0]
+				accumulatedData += string(responseColor)
+			case 135: // Tour
+				turnResponse = subValue[0]
+				accumulatedData += string(turnResponse)
 			default:
 
 			}
 		})
 
 		if signMessage(*serverKey, accumulatedData) == signature {
-
 			if board == "" {
 				fmt.Print("Voici l'id de la partie, envoyez la à votre ami !: ")
 				fmt.Println(*gameUUID)
 				*waiting = true
 				*color = WHITE
 			} else {
-				if *color == UNDEFINED {
-					*color = BLACK
+				if responseColor == UNDEFINED {
+					if *color == UNDEFINED {
+						*color = BLACK
+					}
+					*colorTurn = WHITE
+					fmt.Println(board)
+					*inGame = true
+					*waiting = false
+					*soloGame = true
+				} else {
+					*color = responseColor
+					*colorTurn = turnResponse
+					fmt.Println(board)
+					*inGame = true
+					*waiting = false
 				}
-				*colorTurn = WHITE
-				fmt.Println(board)
-				*inGame = true
-				*waiting = false
 			}
-
 		}
 
 	case 140: // Move response
@@ -466,6 +483,7 @@ func handleTLV(tag byte, data []byte, serverKey *string, encryptionKey *string, 
 		if signMessage(*serverKey, accumulatedData) == signature {
 			if err != "" {
 				*loadOldGame = false
+				fmt.Println("Erreur big")
 				fmt.Println(err)
 			} else {
 				*loadOldGame = true
